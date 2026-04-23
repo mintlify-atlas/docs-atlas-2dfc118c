@@ -1,0 +1,149 @@
+---
+title: 'Prototype and Parameter — method signature types'
+description: 'Prototype captures a method return type and ordered parameter list. Parameter pairs a TypeReference with its own annotation list for per-argument metadata.'
+keywords: ['prototype', 'parameter', 'method signature', 'return type', 'dex', 'dalvik']
+---
+
+A `Prototype` encodes the full signature of a Dalvik method: its return type and the ordered list of parameters. It is carried by both `MethodReference` and `MethodDefinition` through their `Prototype` property. Because DEX files store unique prototype entries in a shared table, `Prototype` implements `IEquatable<Prototype>` — two prototypes are equal when their return types match and their parameter sequences match element-by-element by type.
+
+A `Parameter` pairs a `TypeReference` with an `Annotations` list. This allows parameter-level annotations (such as `@NonNull` or `@Nullable`) to be round-tripped through Dexer without loss. Parameter equality is defined solely by type; annotations are intentionally excluded from the equality check.
+
+## Prototype
+
+### Constructor
+
+```csharp
+public Prototype(TypeReference returntype, params Parameter[] parameters)
+```
+
+<ParamField path="returntype" type="TypeReference" required>
+  The method's return type. Use a primitive type reference (e.g. `PrimitiveType.Void`) or a `ClassReference` for object return types.
+</ParamField>
+
+<ParamField path="parameters" type="Parameter[]">
+  Zero or more parameters in declaration order. Accepts a `params` array so you can pass them inline without constructing a list first.
+</ParamField>
+
+### Properties
+
+<ParamField path="ReturnType" type="TypeReference" required>
+  The return type supplied at construction. Mutable — you can replace it after construction.
+</ParamField>
+
+<ParamField path="Parameters" type="List<Parameter>" required>
+  The ordered parameter list, initialised from the constructor arguments. Mutate this list directly to add, remove, or reorder parameters after construction.
+</ParamField>
+
+### Methods
+
+<ResponseField name="ContainsAnnotation" type="bool">
+  Returns `true` if any parameter in `Parameters` has at least one annotation. Useful for deciding whether to emit parameter annotation data when serialising.
+</ResponseField>
+
+<ResponseField name="Clone" type="Prototype">
+  Produces a shallow copy of the prototype: the same `ReturnType` reference but a new `Parameters` list containing cloned `Parameter` instances. Annotation lists on the cloned parameters are not deep-copied.
+</ResponseField>
+
+```csharp
+// Internal visibility — exposed via ICloneable.Clone
+internal Prototype Clone()
+```
+
+### Method signatures
+
+```csharp
+public bool ContainsAnnotation()
+internal Prototype Clone()
+```
+
+## Parameter
+
+### Constructor
+
+```csharp
+public Parameter(TypeReference type)
+```
+
+<ParamField path="type" type="TypeReference" required>
+  The declared type of this parameter.
+</ParamField>
+
+### Properties
+
+<ParamField path="Type" type="TypeReference" required>
+  The declared type of this parameter. Mutable after construction.
+</ParamField>
+
+<ParamField path="Annotations" type="List<Annotation>" required>
+  Parameter-level annotations. Empty by default. Populated during DEX parsing when the class file contains a `MethodParameters` or annotation attribute targeting individual parameters.
+</ParamField>
+
+## Examples
+
+### Creating a simple void prototype
+
+```csharp
+// void method()
+var proto = new Prototype(PrimitiveType.Void);
+```
+
+### Creating a prototype with parameters
+
+```csharp
+// int indexOf(java.lang.String, int)
+var stringRef = new ClassReference("java.lang.String");
+
+var proto = new Prototype(
+    PrimitiveType.Int,
+    new Parameter(stringRef),
+    new Parameter(PrimitiveType.Int)
+);
+
+Console.WriteLine(proto); // (java.lang.String, int) : int
+```
+
+### Creating a prototype with annotated parameters
+
+```csharp
+// void save(@NonNull java.lang.Object)
+var objectRef  = new ClassReference("java.lang.Object");
+var nonNullRef = new ClassReference("androidx.annotation.NonNull");
+
+var param = new Parameter(objectRef);
+param.Annotations.Add(new Annotation(nonNullRef));
+
+var proto = new Prototype(PrimitiveType.Void, param);
+
+Console.WriteLine(proto.ContainsAnnotation()); // True
+```
+
+### Inspecting a method's prototype
+
+```csharp
+Dex dex = Dex.Read("classes.dex");
+ClassDefinition? cls = dex.GetClass("com.example.MainActivity");
+MethodDefinition? method = cls?.GetMethod("onCreate");
+
+if (method is not null)
+{
+    Prototype proto = method.Prototype;
+    Console.WriteLine($"Returns: {proto.ReturnType}");
+
+    foreach (Parameter p in proto.Parameters)
+    {
+        Console.WriteLine($"  Param: {p.Type}");
+        foreach (Annotation ann in p.Annotations)
+            Console.WriteLine($"    @{ann.Type.Fullname}");
+    }
+}
+```
+
+### Cloning and modifying a prototype
+
+```csharp
+Prototype original = method.Prototype;
+Prototype copy = original.Clone();
+
+// Add an extra int parameter to the copy without touching the original
+copy.Parameters.Add(new Parameter(PrimitiveType.Int));
+```

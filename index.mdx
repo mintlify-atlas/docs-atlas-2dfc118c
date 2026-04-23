@@ -1,97 +1,86 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Dexer: Read and Write Android DEX Files in .NET"
+description: "Dexer is an open source .NET library for parsing, manipulating, and serializing Android Dalvik Executable (.DEX) files with a clean object model."
 ---
 
-## Setting up
+Dexer gives .NET developers a complete object model for working with Android Dalvik Executable (`.DEX`) files — the binary format executed by the Android Runtime. You can read existing DEX files, inspect and modify classes, methods, fields, and individual bytecode instructions, then write the result back to disk.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Load a DEX file, modify bytecode, and write it back in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="package" href="/installation">
+    Install Dexer via NuGet and configure your project.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Core Concepts" icon="book" href="/concepts/dex-format">
+    Understand the DEX format and Dexer's object model.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/dex">
+    Full reference for all public types and methods.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What you can do with Dexer
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Read DEX files" icon="file-import" href="/guides/reading-dex">
+    Parse `.DEX` files from disk or a stream into a rich object model.
+  </Card>
+  <Card title="Modify bytecode" icon="pen-to-square" href="/guides/working-with-instructions">
+    Change opcodes, operands, and registers at the instruction level.
+  </Card>
+  <Card title="Inspect classes" icon="sitemap" href="/api/class-definition">
+    Traverse classes, methods, fields, annotations, and inner classes.
+  </Card>
+  <Card title="Write DEX files" icon="file-export" href="/guides/writing-dex">
+    Serialize your modified DEX back to a file or stream.
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Get started
 
-## Need inspiration?
+<Steps>
+  <Step title="Install Dexer">
+    Add the NuGet package to your project:
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+    ```bash
+    dotnet add package Dexer
+    ```
+  </Step>
+  <Step title="Load a DEX file">
+    Read a `.DEX` file into the object model with a single call:
+
+    ```csharp
+    using Dexer.Core;
+
+    Dex dex = Dex.Read("classes.dex");
+    ```
+  </Step>
+  <Step title="Inspect and modify">
+    Navigate the class hierarchy and modify instructions:
+
+    ```csharp
+    using Dexer.Instructions;
+
+    MethodDefinition method = dex.GetClass("com.example.MainActivity")
+                                  .GetMethod("onCreate");
+
+    // Change an opcode
+    method.Body.Instructions[5].OpCode = OpCodes.AddInt;
+
+    // Change a string constant
+    method.Body.Instructions[7].Operand = "Hello from Dexer!";
+    ```
+  </Step>
+  <Step title="Save the result">
+    Write the modified DEX back to disk:
+
+    ```csharp
+    dex.Write("output.dex");
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Dexer targets **.NET Standard 2.0**, making it compatible with .NET 6+, .NET Framework 4.6.1+, and any other .NET Standard 2.0-compliant runtime.
+</Note>

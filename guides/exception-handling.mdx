@@ -1,0 +1,152 @@
+---
+title: "Inspecting Exception Handlers in Method Bodies"
+description: "Understand how Dalvik try/catch blocks map to ExceptionHandler and Catch objects in Dexer, and learn to read typed and catch-all handlers from a method."
+---
+
+Dalvik exception handling is encoded inline with the instruction stream: each protected region is described by a try range (start and end instructions) paired with one or more handler entries. Dexer models this as `ExceptionHandler` objects stored in `MethodBody.Exceptions`, each holding typed `Catch` clauses and an optional catch-all target.
+
+## MethodBody.Exceptions
+
+`MethodBody.Exceptions` is a `List<ExceptionHandler>`. Each entry in the list corresponds to one try block in the original bytecode.
+
+```csharp
+using Dexer.Core;
+using Dexer.Instructions;
+
+Dex dex = Dex.Read("classes.dex");
+MethodDefinition method = dex.GetClass("com.example.MyClass")!
+                             .GetMethod("riskyOperation")!;
+
+List<ExceptionHandler> handlers = method.Body!.Exceptions;
+Console.WriteLine($"Try blocks: {handlers.Count}");
+```
+
+## ExceptionHandler structure
+
+```csharp
+public class ExceptionHandler
+{
+    public Instruction       TryStart { get; set; }  // first instruction in the try block
+    public Instruction       TryEnd   { get; set; }  // first instruction after the try block
+    public Instruction?      CatchAll { get; set; }  // target for untyped catch (catch-all)
+    public List<Catch>       Catches  { get; set; }  // typed catch clauses
+}
+```
+
+`TryStart` and `TryEnd` are references to `Instruction` objects within the same method body. `TryEnd` points to the instruction immediately following the last protected instruction — consistent with Java's half-open interval convention.
+
+<Note>
+`CatchAll` maps to the Dalvik `catch_all_addr` field. It is non-null when the original Java source had a `finally` block or a bare `catch (Throwable t)` / `catch (Exception e)` handler that covers all exception types. It can coexist with typed `Catches` entries.
+</Note>
+
+## The Catch type
+
+Each entry in `ExceptionHandler.Catches` is a typed catch clause:
+
+```csharp
+public class Catch
+{
+    public TypeReference Type        { get; set; }  // the caught exception type
+    public Instruction   Instruction { get; set; }  // handler entry-point instruction
+}
+```
+
+`Type` is a `TypeReference` whose `Fullname` gives the exception class, e.g. `java.io.IOException`. `Instruction` is the first instruction of the catch handler block.
+
+## How Dalvik exception handling works
+
+<Accordion title="Try/catch encoding in DEX">
+In the DEX binary format, try items are stored in a separate section that references code units by byte offset. The Dexer reader resolves those offsets to actual `Instruction` object references during parsing, so you always work with live instruction pointers rather than raw integers.
+
+When a Dalvik VM executes an instruction and an exception is thrown:
+1. The runtime walks the `try_item` table for the current method to find a range that covers the faulting code unit.
+2. Within that range it scans the `encoded_catch_handler` list for a `Catch` whose type is assignable from the thrown exception type.
+3. If no typed match is found, it falls back to `CatchAll` if present.
+4. If no handler is found in the current frame, the exception propagates up the call stack.
+</Accordion>
+
+## Complete example — reading exception handlers
+
+```csharp
+using System;
+using Dexer.Core;
+using Dexer.Instructions;
+
+Dex dex = Dex.Read("classes.dex");
+ClassDefinition cls = dex.GetClass("com.example.MyClass")!;
+
+foreach (MethodDefinition method in cls.Methods)
+{
+    if (method.Body is null || method.Body.Exceptions.Count == 0)
+        continue;
+
+    Console.WriteLine($"\n{method.Name}:");
+
+    foreach (ExceptionHandler handler in method.Body.Exceptions)
+    {
+        Console.WriteLine(
+            $"  try [{handler.TryStart.Offset:X4} .. {handler.TryEnd.Offset:X4})"
+        );
+
+        // Typed catch clauses
+        foreach (Catch c in handler.Catches)
+        {
+            Console.WriteLine(
+                $"    catch ({c.Type.Fullname}) => [{c.Instruction.Offset:X4}]"
+            );
+        }
+
+        // Catch-all (finally / bare Throwable)
+        if (handler.CatchAll is not null)
+        {
+            Console.WriteLine(
+                $"    catch-all => [{handler.CatchAll.Offset:X4}]"
+            );
+        }
+    }
+}
+```
+
+## Checking whether a method has exception handlers
+
+```csharp
+MethodDefinition method = cls.GetMethod("riskyOperation")!;
+
+if (method.Body?.Exceptions.Count > 0)
+{
+    Console.WriteLine("Method contains try/catch blocks");
+}
+else
+{
+    Console.WriteLine("No exception handlers");
+}
+```
+
+## Finding which handler covers a specific instruction
+
+```csharp
+Instruction target = method.Body!.Instructions[10];
+
+ExceptionHandler? covering = method.Body.Exceptions.FirstOrDefault(h =>
+    h.TryStart.Offset <= target.Offset &&
+    target.Offset < h.TryEnd.Offset
+);
+
+if (covering is not null)
+{
+    Console.WriteLine($"Instruction at {target.Offset:X4} is inside a try block");
+}
+```
+
+<Warning>
+Instruction offsets (`Instruction.Offset`) are recomputed by Dexer only when writing. If you insert or remove instructions before reading offsets, call `dex.Write` to a temporary stream first, or work with list indices rather than byte offsets during modification.
+</Warning>
+
+<CardGroup cols={2}>
+  <Card title="Working with Instructions" icon="microchip" href="/guides/working-with-instructions">
+    Explore the full Instruction model, register access, and opcode reference.
+  </Card>
+  <Card title="Modifying DEX Files" icon="pen-to-square" href="/guides/modifying-dex">
+    Patch bytecode and add new instructions to existing methods.
+  </Card>
+</CardGroup>

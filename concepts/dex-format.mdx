@@ -1,0 +1,158 @@
+---
+title: "DEX File Format: Structure and Layout"
+description: "A deep-dive into the Dalvik Executable binary format, its fixed-section layout, header fields, and how Dexer maps each section to its C# object model."
+---
+
+The Dalvik Executable (DEX) format is the binary container that the Android runtime uses to load compiled Java/Kotlin code onto a device. Every `.apk` file contains at least one `classes.dex` file, and larger apps may split code across `classes2.dex`, `classes3.dex`, and so on. Dexer reads and writes these files entirely in managed C#, exposing a rich object model that mirrors the on-disk layout section by section.
+
+## Header: the 112-byte anchor
+
+The very first 112 bytes (`0x70`) of a DEX file form a fixed-size header that records the file's identity, integrity information, and the offset and size of every subsequent section. Dexer captures this internally in `DexHeader`:
+
+```csharp
+// Dexer.Core.DexHeader (internal)
+internal class DexHeader
+{
+    internal byte[] Magic       { get; set; }   // 8 bytes: magic + version
+    internal uint   CheckSum    { get; set; }   // Adler-32 over bytes [12..end]
+    internal byte[] Signature   { get; set; }   // 20-byte SHA-1 over bytes [32..end]
+    internal uint   FileSize    { get; set; }
+    internal uint   HeaderSize  { get; set; }   // always 0x70 (112)
+    internal uint   EndianTag   { get; set; }   // 0x12345678 = little-endian
+
+    internal uint StringsSize          { get; set; }
+    internal uint StringsOffset        { get; set; }
+    internal uint TypeReferencesSize   { get; set; }
+    internal uint TypeReferencesOffset { get; set; }
+    internal uint PrototypesSize       { get; set; }
+    internal uint PrototypesOffset     { get; set; }
+    internal uint FieldReferencesSize  { get; set; }
+    internal uint FieldReferencesOffset{ get; set; }
+    internal uint MethodReferencesSize { get; set; }
+    internal uint MethodReferencesOffset{ get; set; }
+    internal uint ClassDefinitionsSize { get; set; }
+    internal uint ClassDefinitionsOffset{ get; set; }
+    internal uint DataSize             { get; set; }
+    internal uint DataOffset           { get; set; }
+}
+```
+
+`DexConsts` records the sentinel values Dexer checks during reading:
+
+```csharp
+// Dexer.IO.DexConsts (internal)
+internal static class DexConsts
+{
+    // "dex\n035\0" — magic bytes identifying a DEX 035 file
+    public static readonly byte[] FileMagic = [0x64, 0x65, 0x78, 0x0a, 0x30, 0x33, 0x35, 0x00];
+
+    public const uint Endian        = 0x12345678; // standard little-endian tag
+    public const uint ReverseEndian = 0x78563412; // big-endian (rare, rejected)
+    public const uint NoIndex       = 0xffffffff; // sentinel for absent index fields
+    public const char InnerClassMarker = '$';     // inner-class name separator
+    public const int  SignatureSize = 20;          // SHA-1 digest length
+    public const int  HeaderSize    = 0x70;        // 112 bytes
+}
+```
+
+<Note>
+DEX format versions are encoded in bytes 4–7 of the magic field (e.g., `035`, `036`, `037`, `038`, `039`). Higher version numbers unlock newer opcodes and structural features. Dexer currently targets DEX 035, the most widely compatible version.
+</Note>
+
+## Section layout
+
+A DEX file is divided into a set of consecutively-placed sections. Each section is referenced by an `(offset, count)` pair stored in the header. The sections appear in this canonical order:
+
+| # | Section | Header field | Dexer internal list |
+|---|---------|-------------|---------------------|
+| 1 | **Header** | `HeaderSize` / offset 0 | *(parsed into `DexHeader`)* |
+| 2 | **String pool** | `StringsSize` / `StringsOffset` | `Dex.Strings` |
+| 3 | **Type list** | `TypeReferencesSize` / `TypeReferencesOffset` | `Dex.TypeReferences` |
+| 4 | **Prototype list** | `PrototypesSize` / `PrototypesOffset` | `Dex.Prototypes` |
+| 5 | **Field list** | `FieldReferencesSize` / `FieldReferencesOffset` | `Dex.FieldReferences` |
+| 6 | **Method list** | `MethodReferencesSize` / `MethodReferencesOffset` | `Dex.MethodReferences` |
+| 7 | **Class definitions** | `ClassDefinitionsSize` / `ClassDefinitionsOffset` | `Dex.Classes` |
+| 8 | **Data** | `DataSize` / `DataOffset` | *(code items, annotation sets, debug info)* |
+| 9 | **Link** | `LinkSize` / `LinkOffset` | *(statically linked DEX only, rarely used)* |
+
+<Tip>
+All multi-byte numeric values in a standard DEX file are stored in **little-endian** byte order. The endian tag in the header (`0x12345678`) lets readers detect big-endian variants and swap bytes accordingly before parsing.
+</Tip>
+
+## How Dexer maps sections to C\#
+
+The `Dex` class is the single root object you interact with. It exposes the class list as a public API and manages the other pools internally:
+
+```csharp
+// Dexer.Core.Dex
+public class Dex
+{
+    // Public: all top-level class definitions loaded from the DEX file
+    public List<ClassDefinition> Classes { get; internal set; }
+
+    // Internal pools — populated by DexReader, consumed by DexWriter
+    internal List<TypeReference>   TypeReferences  { get; set; }
+    internal List<FieldReference>  FieldReferences { get; set; }
+    internal List<MethodReference> MethodReferences{ get; set; }
+    internal List<string>          Strings         { get; set; }
+    internal List<Prototype>       Prototypes      { get; set; }
+}
+```
+
+The internal pools are de-duplicated registries. When `DexReader` encounters a type, field, or method reference in the binary, it looks up or inserts the corresponding C# object into the pool. `DexWriter` reverses this process: it rebuilds a consistent pool from the object graph before serialising.
+
+## Reading and writing
+
+Dexer exposes four overloads each for reading and writing, accepting either a file path or a `Stream`:
+
+```csharp
+// Read from disk
+Dex dex = Dex.Read("classes.dex");
+
+// Read from any stream (e.g. an APK entry extracted via ZipArchive)
+using var apkStream = File.OpenRead("app.apk");
+using var zip = new ZipArchive(apkStream, ZipArchiveMode.Read);
+var entry = zip.GetEntry("classes.dex")!;
+Dex dex = Dex.Read(entry.Open());
+
+// Mutate the object graph …
+
+// Write back to disk
+dex.Write("classes_patched.dex");
+
+// Write to a MemoryStream for in-process use
+var ms = new MemoryStream();
+dex.Write(ms);
+```
+
+The `bufferize` parameter (default `true`) copies the source stream into a `MemoryStream` before parsing. Disable it only when working with a seekable, in-memory stream to avoid the copy overhead.
+
+<Warning>
+The checksum and SHA-1 signature fields in the header are **recomputed on every write**. Never patch raw bytes in a DEX file and rely on Dexer to fix the header — always round-trip through `Dex.Read` → mutate → `Dex.Write`.
+</Warning>
+
+## Inner class naming
+
+The DEX format stores inner classes as ordinary top-level entries whose fully-qualified name contains the `$` separator (e.g., `com.example.Outer$Inner`). Dexer automatically reconstructs the nested hierarchy after loading by splitting on this marker and attaching the inner class to its owner via `ClassDefinition.InnerClasses`:
+
+```csharp
+// DexConsts.InnerClassMarker == '$'
+// "com.example.Outer$Inner" → owner "com.example.Outer", inner name "Inner"
+ClassDefinition? outer = dex.GetClass("com.example.Outer");
+foreach (ClassDefinition inner in outer!.InnerClasses)
+{
+    Console.WriteLine(inner.Fullname); // com.example.Outer$Inner
+}
+```
+
+## Looking up a class by name
+
+`Dex.GetClass` performs a depth-first search through the `Classes` list and all nested `InnerClasses` trees, returning `null` when the class is not found:
+
+```csharp
+ClassDefinition? activity = dex.GetClass("com.example.MainActivity");
+if (activity is not null)
+{
+    Console.WriteLine($"Found {activity.Fullname} with {activity.Methods.Count} methods");
+}
+```

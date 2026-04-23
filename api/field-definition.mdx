@@ -1,0 +1,131 @@
+---
+title: 'FieldDefinition — decoded field in a DEX class'
+description: 'FieldDefinition extends FieldReference with access flags, annotations, and an optional static initial value decoded from a Dalvik Executable file.'
+keywords: ['field definition', 'dex', 'dalvik', 'access flags', 'annotations', 'static value']
+---
+
+`FieldDefinition` represents a field that is fully defined within a DEX file. It extends `FieldReference` — which captures the owning class, type, and name — and implements `IMemberDefinition`, adding `AccessFlags`, a strongly-typed `Owner`, and an `Annotations` list.
+
+Static fields may carry an initial value encoded in the `static_values` section of the DEX file. When present, this value is exposed through the `Value` property as a boxed CLR object whose runtime type corresponds to the field's DEX type (e.g., `int`, `string`, `bool`, or a `ClassReference` for enum constants). Instance fields always have `Value = null` because initial values for instance fields are set in constructors, not in the static-values section.
+
+## Inheritance
+
+```
+IMemberReference
+  └── FieldReference  (provides Owner, Type, Name)
+        └── FieldDefinition  (implements IMemberDefinition)
+```
+
+## Properties
+
+<ParamField path="Name" type="string" required>
+  The simple (unqualified) field name. Inherited from `FieldReference`.
+</ParamField>
+
+<ParamField path="Type" type="TypeReference" required>
+  The declared type of this field. Inherited from `FieldReference`. May be a primitive type, a `ClassReference`, or an array type.
+</ParamField>
+
+<ParamField path="Owner" type="ClassDefinition" required>
+  The class that declares this field. Overrides `FieldReference.Owner` with the narrower `ClassDefinition` type.
+</ParamField>
+
+<ParamField path="AccessFlags" type="AccessFlags" required>
+  Bitfield encoding visibility and storage modifiers. Use the boolean shortcut properties for idiomatic access.
+</ParamField>
+
+<ParamField path="Annotations" type="List<Annotation>" required>
+  Field-level annotations attached to this definition.
+</ParamField>
+
+<ParamField path="Value" type="object?">
+  The static initial value from the DEX `static_values` section, or `null` when no static initial value is encoded. Possible runtime types include `int`, `long`, `float`, `double`, `bool`, `string`, `ClassReference` (for enum constant fields), and `null` for reference types initialised to null.
+</ParamField>
+
+## Access flag properties
+
+Each property tests or sets a single bit within `AccessFlags`. Setting a property to `true` ORs the flag in; to clear a flag, assign directly to `AccessFlags`.
+
+<AccordionGroup>
+  <Accordion title="Visibility flags">
+
+| Property | Flag | Value |
+|---|---|---|
+| `IsPublic` | `AccessFlags.Public` | `0x1` |
+| `IsPrivate` | `AccessFlags.Private` | `0x2` |
+| `IsProtected` | `AccessFlags.Protected` | `0x4` |
+
+  </Accordion>
+
+  <Accordion title="Modifier flags">
+
+| Property | Flag | Value |
+|---|---|---|
+| `IsStatic` | `AccessFlags.Static` | `0x8` |
+| `IsFinal` | `AccessFlags.Final` | `0x10` |
+| `IsSynthetic` | `AccessFlags.Synthetic` | `0x1000` |
+| `IsEnum` | `AccessFlags.Enum` | `0x4000` |
+
+  </Accordion>
+
+  <Accordion title="Concurrency and serialisation flags">
+
+| Property | Flag | Value |
+|---|---|---|
+| `IsVolatile` | `AccessFlags.Volatile` | `0x40` |
+| `IsTransient` | `AccessFlags.Transient` | `0x80` |
+
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+`AccessFlags.Volatile` and `AccessFlags.Bridge` share the value `0x40`, and `AccessFlags.Transient` and `AccessFlags.VarArgs` share `0x80`. The field-specific semantics (`Volatile`, `Transient`) apply here; the method-specific semantics (`Bridge`, `VarArgs`) apply to `MethodDefinition`.
+</Note>
+
+## Example: inspecting fields on a class
+
+```csharp
+Dex dex = Dex.Read("classes.dex");
+ClassDefinition? cls = dex.GetClass("com.example.Config");
+
+if (cls is null)
+    return;
+
+foreach (FieldDefinition field in cls.Fields)
+{
+    Console.WriteLine($"{field.Type} {field.Name}");
+    Console.WriteLine($"  Public:  {field.IsPublic}");
+    Console.WriteLine($"  Static:  {field.IsStatic}");
+    Console.WriteLine($"  Final:   {field.IsFinal}");
+
+    if (field.Value is not null)
+        Console.WriteLine($"  Value:   {field.Value}");
+}
+```
+
+## Example: collecting static final constants
+
+```csharp
+Dex dex = Dex.Read("classes.dex");
+
+var constants = dex.Classes
+    .SelectMany(c => c.Fields)
+    .Where(f => f.IsStatic && f.IsFinal && f.Value is not null)
+    .ToList();
+
+foreach (FieldDefinition f in constants)
+    Console.WriteLine($"{f.Owner.Fullname}::{f.Name} = {f.Value}");
+```
+
+## Example: reading field annotations
+
+```csharp
+ClassDefinition? cls = dex.GetClass("com.example.Entity");
+FieldDefinition? idField = cls?.GetField("mId");
+
+if (idField is not null)
+{
+    foreach (Annotation ann in idField.Annotations)
+        Console.WriteLine($"  @{ann.Type.Fullname}");
+}
+```

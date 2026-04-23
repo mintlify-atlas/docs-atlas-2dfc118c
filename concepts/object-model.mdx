@@ -1,0 +1,311 @@
+---
+title: "Object Model: Navigating the DEX Hierarchy"
+description: "How Dexer maps a DEX binary to a C# object graph — covering the Reference vs Definition split, class hierarchy, method bodies, and annotation metadata."
+---
+
+Dexer translates the flat, index-based structure of a DEX binary into a navigable object graph. At the top sits a single `Dex` instance. Beneath it, `ClassDefinition` objects own collections of `MethodDefinition` and `FieldDefinition` objects. Each method with bytecode carries a `MethodBody` holding a list of `Instruction` objects. Understanding this hierarchy — and the **Reference / Definition** split that runs through every layer — is the foundation for all Dexer work.
+
+## The hierarchy at a glance
+
+```
+Dex
+└── List<ClassDefinition>          (Dex.Classes)
+    ├── List<ClassDefinition>      (ClassDefinition.InnerClasses)
+    ├── List<FieldDefinition>      (ClassDefinition.Fields)
+    │   └── Annotation*
+    ├── List<MethodDefinition>     (ClassDefinition.Methods)
+    │   ├── Annotation*
+    │   └── MethodBody?
+    │       ├── List<Register>
+    │       ├── List<Instruction>
+    │       └── List<ExceptionHandler>
+    └── List<Annotation>           (ClassDefinition.Annotations)
+```
+
+## Reference vs. Definition
+
+Every major element in Dexer has two forms — a lightweight **Reference** and a full **Definition**:
+
+<CardGroup cols={2}>
+  <Card title="*Reference types" icon="link">
+    Hold only the identity information needed to name the element: owner, name, type, and prototype. They appear in the internal pools (`Dex.TypeReferences`, `Dex.MethodReferences`, etc.) and as cross-references inside instructions.
+  </Card>
+  <Card title="*Definition types" icon="file-code">
+    Extend their reference counterpart and add content: access flags, annotation lists, a method body, a field value, and inner-class lists. They represent elements that are *defined* in this DEX file.
+  </Card>
+</CardGroup>
+
+The inheritance chains are:
+
+```
+TypeReference
+  └── CompositeType (abstract)
+        ├── ClassReference        ← reference only: Namespace, Name, Fullname
+        │     └── ClassDefinition ← definition: adds Fields, Methods, Annotations, InnerClasses …
+        └── ArrayType             ← wraps any TypeReference as an array
+
+FieldReference    ← (owner: ClassReference, name, type)
+  └── FieldDefinition  ← adds AccessFlags, Annotations, Value
+
+MethodReference   ← (owner: CompositeType, name, prototype)
+  └── MethodDefinition ← adds AccessFlags, Annotations, Body, IsVirtual
+```
+
+<Note>
+`ClassDefinition` *is-a* `ClassReference`. You can pass a `ClassDefinition` anywhere a `ClassReference` is expected. The same applies to `FieldDefinition`/`FieldReference` and `MethodDefinition`/`MethodReference`.
+</Note>
+
+## ClassDefinition
+
+`ClassDefinition` is the richest type in Dexer. It models a single Java/Dalvik class or interface:
+
+```csharp
+// Dexer.Core.ClassDefinition
+public class ClassDefinition : ClassReference, IMemberDefinition
+{
+    public AccessFlags          AccessFlags  { get; set; }
+    public ClassReference?      SuperClass   { get; set; }
+    public List<ClassReference> Interfaces   { get; set; }
+    public string?              SourceFile   { get; set; }
+    public List<Annotation>     Annotations  { get; set; }
+    public List<FieldDefinition>  Fields     { get; set; }
+    public List<MethodDefinition> Methods    { get; set; }
+    public List<ClassDefinition>  InnerClasses { get; set; }
+    public ClassDefinition?     Owner        { get; set; } // null for top-level classes
+}
+```
+
+Convenience boolean properties delegate to `AccessFlags` without exposing raw bit-masks:
+
+```csharp
+ClassDefinition? cls = dex.GetClass("com.example.MyActivity");
+
+Console.WriteLine(cls!.IsPublic);     // (AccessFlags & AccessFlags.Public) != 0
+Console.WriteLine(cls.IsAbstract);
+Console.WriteLine(cls.IsInterface);
+Console.WriteLine(cls.IsEnum);
+```
+
+Lookup helpers avoid manual LINQ on every call site:
+
+```csharp
+// All overloads of 'onClick':
+IEnumerable<MethodDefinition> clicks = cls.GetMethods("onClick");
+
+// First method named 'onCreate' (or null):
+MethodDefinition? onCreate = cls.GetMethod("onCreate");
+
+// Field named 'mTag':
+FieldDefinition? tag = cls.GetField("mTag");
+```
+
+## MethodDefinition and MethodReference
+
+`MethodReference` stores the minimum needed to reference a method cross-DEX:
+
+```csharp
+// Dexer.Core.MethodReference
+public class MethodReference(CompositeType owner, string name, Prototype prototype)
+{
+    public CompositeType Owner     { get; set; }
+    public string        Name      { get; set; }
+    public Prototype     Prototype { get; set; }
+}
+```
+
+`MethodDefinition` extends it with runtime content:
+
+```csharp
+// Dexer.Core.MethodDefinition
+public class MethodDefinition : MethodReference, IMemberDefinition
+{
+    public AccessFlags         AccessFlags { get; set; }
+    public new ClassDefinition Owner       { get; set; }
+    public List<Annotation>    Annotations { get; set; }
+    public MethodBody?         Body        { get; set; } // null for abstract/native
+    public bool                IsVirtual   { get; set; }
+}
+```
+
+Iterating all virtual methods of a class:
+
+```csharp
+foreach (MethodDefinition method in cls.Methods.Where(m => m.IsVirtual))
+{
+    Console.WriteLine($"{method.Owner.Fullname}::{method.Name}{method.Prototype}");
+}
+```
+
+## FieldDefinition and FieldReference
+
+Fields follow the same pattern. `FieldReference` carries owner, name, and type. `FieldDefinition` adds access flags, annotations, and a boxed initial value:
+
+```csharp
+// Dexer.Core.FieldDefinition
+public class FieldDefinition : FieldReference, IMemberDefinition
+{
+    public AccessFlags         AccessFlags { get; set; }
+    public new ClassDefinition Owner       { get; set; }
+    public List<Annotation>    Annotations { get; set; }
+    public object?             Value       { get; set; } // static initial value, if any
+}
+```
+
+```csharp
+foreach (FieldDefinition field in cls.Fields.Where(f => f.IsStatic && f.IsFinal))
+{
+    Console.WriteLine($"const {field.Type} {field.Name} = {field.Value}");
+}
+```
+
+## Prototype and Parameter
+
+A `Prototype` encodes a method signature: return type plus an ordered list of `Parameter` objects. It is shared across all methods with identical signatures via the internal `Dex.Prototypes` pool.
+
+```csharp
+// Dexer.Core.Prototype
+public class Prototype(TypeReference returntype, params Parameter[] parameters)
+{
+    public TypeReference    ReturnType  { get; set; }
+    public List<Parameter>  Parameters  { get; set; }
+
+    // true if any parameter carries an annotation
+    public bool ContainsAnnotation();
+}
+
+// Dexer.Core.Parameter
+public class Parameter(TypeReference type) : IAnnotationProvider
+{
+    public TypeReference    Type        { get; set; }
+    public List<Annotation> Annotations { get; set; }
+}
+```
+
+Reading a method's parameter types:
+
+```csharp
+MethodDefinition? method = cls.GetMethod("startActivity");
+if (method is not null)
+{
+    Console.WriteLine($"Returns: {method.Prototype.ReturnType}");
+    foreach (Parameter p in method.Prototype.Parameters)
+        Console.WriteLine($"  param: {p.Type}");
+}
+```
+
+## MethodBody and Instructions
+
+A non-abstract, non-native method has a `Body`. The body manages a register file and a flat list of instructions:
+
+```csharp
+// Dexer.Instructions.MethodBody
+public class MethodBody
+{
+    public MethodDefinition     Owner              { get; set; }
+    public List<Register>       Registers          { get; set; }
+    public List<Instruction>    Instructions       { get; set; }
+    public List<ExceptionHandler> Exceptions       { get; set; }
+    public ushort               IncomingArguments  { get; set; }
+    public ushort               OutgoingArguments  { get; set; }
+    public DebugInfo?           DebugInfo          { get; set; }
+}
+
+// Dexer.Instructions.Instruction
+public class Instruction
+{
+    public OpCodes        OpCode     { get; set; }
+    public int            Offset     { get; set; } // byte offset within code unit
+    public List<Register> Registers  { get; set; }
+    public object?        Operand    { get; set; } // string, TypeReference, MethodReference, …
+}
+
+// Dexer.Instructions.Register
+public class Register(int index)
+{
+    public int Index { get; set; }
+}
+```
+
+Printing all instructions of a method:
+
+```csharp
+MethodDefinition? ctor = cls.GetMethod("<init>");
+if (ctor?.Body is MethodBody body)
+{
+    Console.WriteLine($"Registers: {body.Registers.Count}");
+    foreach (Instruction ins in body.Instructions)
+        Console.WriteLine($"  [{ins.Offset:X4}] {ins}");
+}
+```
+
+## Annotations
+
+Annotations attach metadata to classes, methods, fields, and even individual parameters. Each `Annotation` carries the annotation class reference, a visibility level, and a list of named arguments:
+
+```csharp
+// Dexer.Core.Annotation
+public class Annotation(ClassReference type)
+{
+    public ClassReference          Type       { get; }
+    public AnnotationVisibility    Visibility { get; set; }
+    public List<AnnotationArgument> Arguments { get; }
+}
+
+// Dexer.Core.AnnotationArgument
+public class AnnotationArgument(string name, object? value)
+{
+    public string  Name  { get; }
+    public object? Value { get; }
+}
+
+// Dexer.Core.AnnotationVisibility
+public enum AnnotationVisibility
+{
+    Build   = 0x00, // stripped before packaging
+    Runtime = 0x01, // visible via reflection at runtime
+    System  = 0x02, // used internally by the runtime
+}
+```
+
+Reading annotations from a class:
+
+```csharp
+foreach (Annotation ann in cls.Annotations)
+{
+    Console.WriteLine($"@{ann.Type.Fullname} ({ann.Visibility})");
+    foreach (AnnotationArgument arg in ann.Arguments)
+        Console.WriteLine($"  {arg.Name} = {arg.Value}");
+}
+```
+
+The `IAnnotationProvider` interface unifies annotation access across classes, methods, fields, and parameters:
+
+```csharp
+public interface IAnnotationProvider
+{
+    List<Annotation> Annotations { get; set; }
+}
+```
+
+## Inner classes
+
+Inner classes are stored in the DEX binary as flat entries whose name contains the `$` separator. Dexer automatically re-nests them during loading so you navigate the true owner/inner relationship:
+
+```csharp
+// Dexer.Core.ClassDefinition
+public ClassDefinition? Owner        { get; set; } // null for top-level
+public List<ClassDefinition> InnerClasses { get; set; }
+```
+
+```csharp
+ClassDefinition? outer = dex.GetClass("com.example.Outer");
+foreach (ClassDefinition inner in outer!.InnerClasses)
+{
+    Console.WriteLine($"Inner: {inner.Fullname}");
+    Console.WriteLine($"  Owner: {inner.Owner?.Fullname}");
+}
+```
+
+<Tip>
+Use `Dex.GetClass(fullname)` to locate any class by its fully-qualified name. The search is recursive through the entire `InnerClasses` tree, so you do not need to know whether the class is top-level or nested before calling it.
+</Tip>

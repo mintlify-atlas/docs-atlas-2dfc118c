@@ -1,0 +1,176 @@
+---
+title: 'ClassDefinition — fully decoded class in a DEX'
+description: 'ClassDefinition extends ClassReference with access flags, superclass, interfaces, fields, methods, and annotations for a class decoded from a DEX file.'
+keywords: ['class definition', 'dex', 'dalvik', 'access flags', 'methods', 'fields', 'annotations']
+---
+
+`ClassDefinition` represents a class that is fully defined within a DEX file, as opposed to `ClassReference`, which only captures a name used in a cross-reference. It inherits from `ClassReference` (providing `Fullname`, `Namespace`, and `Name`) and implements `IMemberDefinition` (adding `AccessFlags` and `Owner`).
+
+Instances are not constructed directly. They are created by the Dexer parser when reading a `.dex` file, or produced when you promote a `ClassReference` to a full definition. The class graph is rooted at `Dex.Classes`; inner classes are nested under `InnerClasses` rather than appearing at the top level.
+
+## Inheritance
+
+```
+TypeReference
+  └── CompositeType
+        └── ClassReference  (provides Fullname, Namespace, Name)
+              └── ClassDefinition  (implements IMemberDefinition)
+```
+
+## Properties
+
+<ParamField path="Fullname" type="string" required>
+  The fully qualified class name in dot-separated notation, for example `com.example.MyClass`. Inherited from `ClassReference`. Setting this property parses and updates `Namespace` and `Name` automatically.
+</ParamField>
+
+<ParamField path="AccessFlags" type="AccessFlags" required>
+  A bitfield describing the visibility and characteristics of the class. Use the boolean shortcut properties (`IsPublic`, `IsAbstract`, etc.) for idiomatic access.
+</ParamField>
+
+<ParamField path="SuperClass" type="ClassReference?">
+  The direct superclass of this class, or `null` for `java.lang.Object` (which has no superclass in the DEX model).
+</ParamField>
+
+<ParamField path="Interfaces" type="List<ClassReference>" required>
+  The list of interfaces this class declares it implements.
+</ParamField>
+
+<ParamField path="InnerClasses" type="List<ClassDefinition>" required>
+  Nested class definitions whose `Fullname` contains the inner-class marker. These are removed from `Dex.Classes` during loading and placed here instead.
+</ParamField>
+
+<ParamField path="SourceFile" type="string?">
+  The original source file name recorded in the DEX debug information, for example `MainActivity.java`. May be `null` if the DEX was compiled without debug info.
+</ParamField>
+
+<ParamField path="Annotations" type="List<Annotation>" required>
+  Class-level annotations attached to this definition.
+</ParamField>
+
+<ParamField path="Fields" type="List<FieldDefinition>" required>
+  All field definitions declared on this class, in the order they appear in the DEX file.
+</ParamField>
+
+<ParamField path="Methods" type="List<MethodDefinition>" required>
+  All method definitions declared on this class, in the order they appear in the DEX file.
+</ParamField>
+
+<ParamField path="Owner" type="ClassDefinition?">
+  The enclosing class when this is an inner class, or `null` for top-level classes. Set automatically during the hierarchicalization pass when loading a DEX.
+</ParamField>
+
+## Lookup methods
+
+Three convenience methods search the `Fields` and `Methods` lists by name without requiring a LINQ query on the calling side.
+
+<ParamField path="name" type="string" required>
+  The simple (unqualified) method or field name to search for.
+</ParamField>
+
+<ResponseField name="GetMethod return" type="MethodDefinition">
+  The first `MethodDefinition` whose `Name` matches, or `null` if none is found. Use `GetMethods` when overloads with the same name may exist.
+</ResponseField>
+
+<ResponseField name="GetMethods return" type="IEnumerable<MethodDefinition>">
+  A lazy sequence of every `MethodDefinition` whose `Name` matches. May be empty.
+</ResponseField>
+
+<ResponseField name="GetField return" type="FieldDefinition">
+  The first `FieldDefinition` whose `Name` matches, or `null` if none is found.
+</ResponseField>
+
+```csharp
+Dex dex = Dex.Read("classes.dex");
+ClassDefinition? cls = dex.GetClass("com.example.MainActivity");
+
+if (cls is not null)
+{
+    // Get the first method named "onCreate"
+    MethodDefinition? onCreate = cls.GetMethod("onCreate");
+
+    // Get all overloads of "log"
+    foreach (MethodDefinition m in cls.GetMethods("log"))
+        Console.WriteLine(m.Prototype);
+
+    // Look up a field by name
+    FieldDefinition? tag = cls.GetField("TAG");
+}
+```
+
+### Method signatures
+
+```csharp
+public MethodDefinition GetMethod(string name)
+public IEnumerable<MethodDefinition> GetMethods(string name)
+public FieldDefinition GetField(string name)
+```
+
+## Access flag properties
+
+Each boolean property is a convenience wrapper that tests or sets the corresponding `AccessFlags` bit. Setting any of these properties to `true` ORs the corresponding flag into `AccessFlags`; setting to `false` has no effect (the flag must be cleared directly on `AccessFlags` if needed).
+
+<AccordionGroup>
+  <Accordion title="Visibility flags">
+
+| Property | Flag | Value |
+|---|---|---|
+| `IsPublic` | `AccessFlags.Public` | `0x1` |
+| `IsPrivate` | `AccessFlags.Private` | `0x2` |
+| `IsProtected` | `AccessFlags.Protected` | `0x4` |
+
+  </Accordion>
+
+  <Accordion title="Modifier flags">
+
+| Property | Flag | Value |
+|---|---|---|
+| `IsStatic` | `AccessFlags.Static` | `0x8` |
+| `IsFinal` | `AccessFlags.Final` | `0x10` |
+| `IsAbstract` | `AccessFlags.Abstract` | `0x400` |
+| `IsSynthetic` | `AccessFlags.Synthetic` | `0x1000` |
+
+  </Accordion>
+
+  <Accordion title="Type kind flags">
+
+| Property | Flag | Value |
+|---|---|---|
+| `IsInterface` | `AccessFlags.Interface` | `0x200` |
+| `IsAnnotation` | `AccessFlags.Annotation` | `0x2000` |
+| `IsEnum` | `AccessFlags.Enum` | `0x4000` |
+
+  </Accordion>
+</AccordionGroup>
+
+```csharp
+ClassDefinition? cls = dex.GetClass("com.example.MyEnum");
+
+if (cls is not null)
+{
+    Console.WriteLine(cls.IsPublic);    // true / false
+    Console.WriteLine(cls.IsEnum);      // true
+    Console.WriteLine(cls.IsAbstract);  // false
+
+    // Set a flag
+    cls.IsFinal = true;
+    // Equivalent to: cls.AccessFlags |= AccessFlags.Final;
+}
+```
+
+## Example: walking the class hierarchy
+
+```csharp
+Dex dex = Dex.Read("classes.dex");
+
+void PrintClass(ClassDefinition cls, int depth = 0)
+{
+    string indent = new string(' ', depth * 2);
+    Console.WriteLine($"{indent}{cls.Fullname}");
+
+    foreach (ClassDefinition inner in cls.InnerClasses)
+        PrintClass(inner, depth + 1);
+}
+
+foreach (ClassDefinition cls in dex.Classes)
+    PrintClass(cls);
+```

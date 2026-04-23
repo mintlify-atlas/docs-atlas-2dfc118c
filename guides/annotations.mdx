@@ -1,0 +1,174 @@
+---
+title: "Reading and Inspecting Annotations"
+description: "Access Java annotations on classes, methods, fields, and parameters through Dexer's Annotation, AnnotationArgument, and AnnotationVisibility model."
+---
+
+Android DEX files preserve Java annotations at the bytecode level, including their runtime visibility. Dexer surfaces annotations as typed `Annotation` objects attached directly to class definitions, method definitions, field definitions, and method parameters — no reflection required.
+
+## Where annotations appear
+
+Annotations can be attached to four different declaration sites, each exposing a `List<Annotation>` property:
+
+| Site | Property |
+|---|---|
+| Class | `ClassDefinition.Annotations` |
+| Method | `MethodDefinition.Annotations` |
+| Field | `FieldDefinition.Annotations` |
+| Parameter | `Parameter.Annotations` (via `MethodDefinition.Prototype.Parameters`) |
+
+```csharp
+using Dexer.Core;
+
+Dex dex = Dex.Read("classes.dex");
+ClassDefinition cls = dex.GetClass("dexer.poc.MainActivity")!;
+
+// Class-level annotations
+List<Annotation> classAnnotations = cls.Annotations;
+
+// Method-level annotations
+MethodDefinition method = cls.GetMethod("onCreate")!;
+List<Annotation> methodAnnotations = method.Annotations;
+
+// Field-level annotations
+FieldDefinition field = cls.GetField("TAG")!;
+List<Annotation> fieldAnnotations = field.Annotations;
+
+// Parameter annotations
+foreach (Parameter param in method.Prototype.Parameters)
+{
+    List<Annotation> paramAnnotations = param.Annotations;
+}
+```
+
+## The Annotation type
+
+Each `Annotation` carries three pieces of information:
+
+```csharp
+public ClassReference        Type       { get; }   // the annotation's class
+public List<AnnotationArgument> Arguments { get; }  // name–value pairs
+public AnnotationVisibility  Visibility { get; set; }
+```
+
+`Type` is a `ClassReference` whose `Fullname` gives the fully-qualified annotation type name, e.g. `java.lang.Override` or `android.annotation.SuppressLint`.
+
+## AnnotationArgument — name and value pairs
+
+Each element in `Annotation.Arguments` is an `AnnotationArgument`:
+
+```csharp
+public string  Name  { get; }
+public object? Value { get; }
+```
+
+The `Value` can be a primitive boxed type (`int`, `long`, `bool`, etc.), a `string`, a `ClassReference`, another `Annotation` (nested), or an `Array` of any of the above. Use `is` pattern matching to inspect the value at runtime.
+
+```csharp
+foreach (AnnotationArgument arg in annotation.Arguments)
+{
+    Console.Write($"  {arg.Name} = ");
+
+    switch (arg.Value)
+    {
+        case string s:
+            Console.WriteLine($"\"{s}\"");
+            break;
+        case Array arr:
+            Console.WriteLine($"[{arr.Length} elements]");
+            break;
+        case Annotation nested:
+            Console.WriteLine($"@{nested.Type.Fullname}(...)");
+            break;
+        default:
+            Console.WriteLine(arg.Value);
+            break;
+    }
+}
+```
+
+## AnnotationVisibility
+
+The `Visibility` property controls at what stage of the build pipeline the annotation is accessible:
+
+| Value | Encoded | Meaning |
+|---|---|---|
+| `Build` | `0x00` | Discarded after compilation; not present at runtime |
+| `Runtime` | `0x01` | Retained in the DEX and visible via reflection at runtime |
+| `System` | `0x02` | Used internally by the Dalvik/ART runtime; not accessible from user code |
+
+```csharp
+if (annotation.Visibility == AnnotationVisibility.Runtime)
+{
+    Console.WriteLine($"  Runtime-visible: {annotation.Type.Fullname}");
+}
+```
+
+## Complete example — reading class annotations
+
+The snippet below loads a DEX, finds a class, and prints every annotation together with its arguments and visibility.
+
+```csharp
+using System;
+using Dexer.Core;
+
+Dex dex = Dex.Read("classes.dex");
+ClassDefinition cls = dex.GetClass("dexer.poc.MainActivity")!;
+
+Console.WriteLine($"Annotations on {cls.Fullname}:");
+
+foreach (Annotation annotation in cls.Annotations)
+{
+    Console.WriteLine($"\n  @{annotation.Type.Fullname}");
+    Console.WriteLine($"  Visibility: {annotation.Visibility}");
+
+    foreach (AnnotationArgument arg in annotation.Arguments)
+    {
+        Console.WriteLine($"    {arg.Name} = {arg.Value}");
+    }
+}
+
+// Also inspect method annotations
+foreach (MethodDefinition method in cls.Methods)
+{
+    foreach (Annotation annotation in method.Annotations)
+    {
+        Console.WriteLine(
+            $"  [{method.Name}] @{annotation.Type.Fullname} " +
+            $"({annotation.Visibility})"
+        );
+    }
+}
+```
+
+## Iterating parameter annotations
+
+Parameter annotations are stored on `Parameter` objects inside the method's `Prototype`. Each `Parameter` implements `IAnnotationProvider` and exposes its own `Annotations` list.
+
+```csharp
+MethodDefinition method = cls.GetMethod("onCreate")!;
+
+for (int i = 0; i < method.Prototype.Parameters.Count; i++)
+{
+    Parameter param = method.Prototype.Parameters[i];
+
+    foreach (Annotation ann in param.Annotations)
+    {
+        Console.WriteLine(
+            $"  Param {i} annotated with @{ann.Type.Fullname}"
+        );
+    }
+}
+```
+
+<Note>
+Parameter annotations are only present when the source was compiled with them retained. Many annotation types have `Build` visibility and will not appear in the DEX at all — they are stripped by the compiler before the DEX is generated.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="Reading DEX Files" icon="file-import" href="/guides/reading-dex">
+    Load a DEX file and traverse its class hierarchy.
+  </Card>
+  <Card title="Exception Handling" icon="shield-exclamation" href="/guides/exception-handling">
+    Read try/catch blocks and typed catch clauses from method bodies.
+  </Card>
+</CardGroup>

@@ -1,0 +1,126 @@
+---
+title: "Writing DEX Files to Disk or Stream"
+description: "Serialize a Dex object graph back to the binary DEX format using file-path or Stream overloads, with optional in-memory buffering for atomic writes."
+---
+
+After loading and modifying a DEX file, call `dex.Write` to serialize the object graph back to the Dalvik Executable binary format. Like `Dex.Read`, the writer supports both file-path and `Stream` overloads, and accepts a `bufferize` flag that controls whether serialization happens in an intermediate `MemoryStream` before being flushed to the final destination.
+
+## Writing to a file
+
+Pass a file path to overwrite or create the output file.
+
+```csharp
+using Dexer.Core;
+
+Dex dex = Dex.Read("classes.dex");
+
+// ... make modifications ...
+
+dex.Write("output.dex");
+```
+
+This is equivalent to calling `dex.Write("output.dex", bufferize: true)`.
+
+## Writing to a Stream
+
+Pass any writable `Stream` when you need to control the destination — for example, writing to a `MemoryStream` for in-process inspection or piping output through a compression layer.
+
+```csharp
+using var output = new MemoryStream();
+dex.Write(output);
+
+// output now contains a valid DEX binary
+byte[] bytes = output.ToArray();
+```
+
+## The `bufferize` parameter
+
+Both overloads accept an optional `bool bufferize` argument that defaults to `true`.
+
+```csharp
+// Explicit default — writes to a MemoryStream first, then copies to the file
+dex.Write("output.dex", bufferize: true);
+
+// Direct write — bytes flow straight into the file stream
+dex.Write("output.dex", bufferize: false);
+```
+
+<Note>
+When `bufferize` is `true`, Dexer serializes the entire DEX into a `MemoryStream` and only copies it to the destination stream afterward. This means the original file is not truncated until writing is complete, which protects against a corrupt output if serialization fails partway through. Disable buffering only when writing to a stream that already handles its own transaction semantics, or when memory is constrained.
+</Note>
+
+## Stream-based write for in-memory scenarios
+
+Writing to a `MemoryStream` is useful when you need to validate the output or pass the bytes elsewhere without touching disk.
+
+```csharp
+using Dexer.Core;
+
+Dex dex = Dex.Read("classes.dex");
+// ... modify ...
+
+using var ms = new MemoryStream();
+dex.Write(ms, bufferize: false); // stream is already in-memory; no need to double-buffer
+
+ms.Position = 0;
+// Use ms however you need — hash it, send it over a socket, etc.
+```
+
+## Rebuilding an APK with apktool and jarsigner
+
+Dexer produces a standalone `classes.dex` file. To create a valid, installable APK you need to repack the DEX into the APK archive and re-sign it. The README workflow uses **apktool** to unpack and repack resources, and **jarsigner** with the Android debug keystore.
+
+<Steps>
+  <Step title="Unpack the APK">
+    Extract the APK, keeping the raw `classes.dex` in place (`-s` skips resource decoding, `-f` forces overwrite).
+
+    ```bash
+    apktool d -s -f DexerPOC.apk output
+    ```
+  </Step>
+
+  <Step title="Patch the DEX with Dexer">
+    Run your Dexer tool, writing the modified file to `output/classes.dex`.
+
+    ```csharp
+    Dex dex = Dex.Read("output/classes.dex");
+    // ... your modifications ...
+    dex.Write("output/classes.dex");
+    ```
+  </Step>
+
+  <Step title="Repack the APK">
+    ```bash
+    apktool b output DexerPOC.new.apk
+    ```
+  </Step>
+
+  <Step title="Sign the APK">
+    Use the Android SDK debug keystore for development testing.
+
+    ```bash
+    jarsigner -keystore .\.android\debug.keystore \
+              -storepass android -keypass android \
+              DexerPOC.new.apk androiddebugkey
+    ```
+  </Step>
+
+  <Step title="Install on a device or emulator">
+    ```bash
+    adb install DexerPOC.new.apk
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+The debug keystore is for development only. Signing with a release keystore requires a dedicated key and certificate; never distribute an APK signed with the Android SDK debug key.
+</Warning>
+
+<CardGroup cols={2}>
+  <Card title="Reading DEX Files" icon="file-import" href="/guides/reading-dex">
+    Load a DEX file from disk or a stream and traverse its class hierarchy.
+  </Card>
+  <Card title="Modifying DEX Files" icon="pen-to-square" href="/guides/modifying-dex">
+    Patch opcodes, operands, and inject new instructions before writing.
+  </Card>
+</CardGroup>

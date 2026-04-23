@@ -1,0 +1,128 @@
+---
+title: "Register — Dalvik register representation"
+description: "Reference for the Register class, how the Dalvik virtual register file maps to MethodBody's pre-allocated pool, and how parameter registers are laid out."
+keywords: ["register", "dalvik", "virtual register", "method body", "parameter", "vN"]
+---
+
+The Dalvik virtual machine uses a register-based architecture. Every value a method operates on — local variables, intermediate results, and incoming arguments — lives in a numbered virtual register, written `v0`, `v1`, `v2`, and so on in Dalvik assembly notation.
+
+In Dexer, `Register` is a thin wrapper around an integer index. You do not create registers for individual instructions; instead you obtain them from the pre-allocated pool on `MethodBody.Registers` and reference those same objects in every `Instruction` that uses them.
+
+## `Register`
+
+### Constructor
+
+<ParamField path="Register(int index)" type="constructor">
+  Creates a register with the given index. In normal usage you do not call this directly — `MethodBody`'s constructor creates all registers in its pool automatically.
+
+  | Parameter | Type  | Description                             |
+  |-----------|-------|-----------------------------------------|
+  | `index`   | `int` | Zero-based register number (v0 = 0, v1 = 1, …). |
+</ParamField>
+
+### Properties
+
+<ParamField path="Index" type="int" required>
+  The zero-based register number. Register `v0` has `Index = 0`, `v1` has `Index = 1`, and so on. Dexer encodes this value directly into the instruction's binary representation.
+</ParamField>
+
+## Register layout in a method
+
+Dalvik's calling convention places parameter registers at the **high** end of the register file. Given a method with a total of `N` registers and `P` parameter registers:
+
+- Registers `v0` through `v(N-P-1)` are local (scratch) registers.
+- Registers `v(N-P)` through `v(N-1)` are parameter registers.
+
+For **instance methods**, the first parameter register holds `this`, followed by the declared parameters in order. For **static methods**, all parameter registers hold declared parameters.
+
+```
+Example: instance method with 4 total registers, 2 parameters (this + one arg)
+
+  v0  — local
+  v1  — local
+  v2  — this  (first parameter register)
+  v3  — arg0  (second parameter register)
+```
+
+`MethodBody.IncomingArguments` records how many of the high registers are parameter registers, so you can compute the split:
+
+```csharp
+MethodBody body = method.Body;
+int total  = body.Registers.Count;
+int params = body.IncomingArguments;
+int locals = total - params;
+
+// First parameter register
+Register firstParam = body.Registers[locals];
+```
+
+## The register pool
+
+`MethodBody` pre-allocates all registers in its constructor. The pool is exposed as `MethodBody.Registers`, a `List<Register>` indexed from 0 to `registersSize - 1`.
+
+Always use pool registers in instructions — never construct a `Register` with an arbitrary index and pass it to an instruction, because that index may exceed the method's declared register count and produce a malformed DEX file.
+
+```csharp
+MethodBody body = method.Body;
+
+// Correct: use a register from the pool
+Register v0 = body.Registers[0];
+Register v1 = body.Registers[1];
+
+var ins = new Instruction(OpCodes.Move, null, v0, v1);  // move v0, v1
+body.Instructions.Add(ins);
+```
+
+## `MethodBody.IncomingArguments` and `OutgoingArguments`
+
+<ParamField path="IncomingArguments" type="ushort">
+  Number of argument registers received by this method. Includes the implicit `this` register for instance methods. Dexer reads this from the `code_item` header in the DEX file.
+</ParamField>
+
+<ParamField path="OutgoingArguments" type="ushort">
+  The maximum number of argument registers consumed by any `invoke-*` instruction inside the method body. Dexer computes and writes this when serializing the `code_item` header.
+</ParamField>
+
+## Wide registers
+
+`long` and `double` values occupy two consecutive registers. If `v2` holds a `long`, then `v3` is the high half — do not use `v3` independently while `v2` holds a wide value. Dexer does not enforce this constraint; it is your responsibility to maintain proper wide-register pairing.
+
+```csharp
+// Load a long constant into v2 (uses v2 and v3 implicitly)
+var loadWide = new Instruction(OpCodes.ConstWide, 123456789L, body.Registers[2]);
+body.Instructions.Add(loadWide);
+
+// Return the wide value from v2
+var ret = new Instruction(OpCodes.ReturnWide, null, body.Registers[2]);
+body.Instructions.Add(ret);
+```
+
+## Full example — building a method body from scratch
+
+The example below constructs a trivial static method that returns the sum of two integer parameters.
+
+```csharp
+using Dexer.Instructions;
+using Dexer.Core;
+
+// Method declared as: static int add(int a, int b)
+// We allocate 4 registers: v0 (result), v1 (scratch), v2 (a), v3 (b)
+var body = new MethodBody(method, registersSize: 4);
+body.IncomingArguments = 2; // a and b
+
+Register result = body.Registers[0]; // local: will hold the sum
+Register a      = body.Registers[2]; // parameter: first argument
+Register b      = body.Registers[3]; // parameter: second argument
+
+// add-int v0, v2, v3  →  result = a + b
+body.Instructions.Add(new Instruction(OpCodes.AddInt, null, result, a, b));
+
+// return v0
+body.Instructions.Add(new Instruction(OpCodes.Return, null, result));
+
+method.Body = body;
+```
+
+<Note>
+  When you read a DEX file, Dexer populates `MethodBody.Registers` automatically from the `registers_size` field in the `code_item`. You only need to construct `MethodBody` manually when generating code from scratch.
+</Note>

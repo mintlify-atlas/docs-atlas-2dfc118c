@@ -1,0 +1,166 @@
+---
+title: "PrimitiveType — built-in singleton types"
+description: "PrimitiveType exposes nine static singletons for the JVM primitive types. Use them wherever a TypeReference is expected in method prototypes and field types."
+keywords: ["PrimitiveType", "TypeReference", "primitive", "void", "boolean", "int", "long", "float", "double", "dexer"]
+---
+
+`PrimitiveType` is a sealed-by-convention subclass of `TypeReference` that represents one of the nine built-in JVM primitive types. Because primitive types are unique — there is only one `int`, one `void`, and so on — Dexer uses the singleton pattern: the constructor is private, and all nine instances are exposed as `static readonly` fields. You never `new` a `PrimitiveType`; you reference the pre-existing instance directly.
+
+```csharp
+public class PrimitiveType : TypeReference
+```
+
+The class lives in the `Dexer.Core` namespace.
+
+---
+
+## Singleton instances
+
+Each property holds the single canonical instance for that primitive type. The `TypeDescriptor` on each instance is set to the matching `TypeDescriptors` enum value, whose underlying integer is the ASCII code of the Dalvik descriptor character.
+
+| Property | JVM descriptor | `TypeDescriptors` value | C# equivalent |
+|---|---|---|---|
+| `PrimitiveType.Void` | `V` | `TypeDescriptors.Void` | `void` |
+| `PrimitiveType.Boolean` | `Z` | `TypeDescriptors.Boolean` | `bool` |
+| `PrimitiveType.Byte` | `B` | `TypeDescriptors.Byte` | `sbyte` |
+| `PrimitiveType.Short` | `S` | `TypeDescriptors.Short` | `short` |
+| `PrimitiveType.Char` | `C` | `TypeDescriptors.Char` | `char` |
+| `PrimitiveType.Int` | `I` | `TypeDescriptors.Int` | `int` |
+| `PrimitiveType.Long` | `J` | `TypeDescriptors.Long` | `long` |
+| `PrimitiveType.Float` | `F` | `TypeDescriptors.Float` | `float` |
+| `PrimitiveType.Double` | `D` | `TypeDescriptors.Double` | `double` |
+
+<Note>
+  The Dalvik descriptor for `byte` is `B` — which maps to C# `sbyte` (signed 8-bit integer), not `byte`. This matches the JVM specification, where the `byte` type is signed.
+</Note>
+
+---
+
+## Source definition
+
+The nine singletons as declared in the source:
+
+```csharp
+public static readonly PrimitiveType Void    = new(TypeDescriptors.Void);
+public static readonly PrimitiveType Boolean = new(TypeDescriptors.Boolean);
+public static readonly PrimitiveType Byte    = new(TypeDescriptors.Byte);
+public static readonly PrimitiveType Short   = new(TypeDescriptors.Short);
+public static readonly PrimitiveType Char    = new(TypeDescriptors.Char);
+public static readonly PrimitiveType Int     = new(TypeDescriptors.Int);
+public static readonly PrimitiveType Long    = new(TypeDescriptors.Long);
+public static readonly PrimitiveType Float   = new(TypeDescriptors.Float);
+public static readonly PrimitiveType Double  = new(TypeDescriptors.Double);
+```
+
+---
+
+## Methods
+
+### ToString
+
+```csharp
+public override string ToString()
+```
+
+Returns the single-character descriptor string corresponding to the `TypeDescriptors` enum value — for example, `"I"` for `PrimitiveType.Int` and `"V"` for `PrimitiveType.Void`.
+
+### Equals
+
+```csharp
+public bool Equals(PrimitiveType other)
+public override bool Equals(TypeReference other)
+```
+
+Two `PrimitiveType` instances are equal if and only if they have the same `TypeDescriptor`. Because there is exactly one instance per primitive type, this is equivalent to reference equality in practice.
+
+---
+
+## Usage examples
+
+### Using primitives in method prototypes
+
+A `Prototype` describes a method's return type and parameter types. Pass `PrimitiveType` singletons wherever a `TypeReference` is needed:
+
+```csharp
+// void method()
+var voidNoArgs = new Prototype(PrimitiveType.Void);
+
+// void method(int)
+var voidTakesInt = new Prototype(PrimitiveType.Void, new Parameter(PrimitiveType.Int));
+
+// long method(int, boolean)
+var longMethod = new Prototype(
+    PrimitiveType.Long,
+    new Parameter(PrimitiveType.Int),
+    new Parameter(PrimitiveType.Boolean)
+);
+```
+
+### Using primitives in field types
+
+```csharp
+// A field of type float
+var field = new FieldDefinition();
+field.Type = PrimitiveType.Float;
+```
+
+### Mixing primitives and class references in arrays
+
+```csharp
+// int[]
+var intArray = new ArrayType(PrimitiveType.Int);
+
+// A method taking a byte[] and returning void
+var prototype = new Prototype(
+    PrimitiveType.Void,
+    new Parameter(new ArrayType(PrimitiveType.Byte))
+);
+```
+
+### Checking whether a type is a specific primitive
+
+Because singletons are used, reference equality works:
+
+```csharp
+if (someType == PrimitiveType.Int)
+{
+    Console.WriteLine("This is an int.");
+}
+
+// Or use the typed Equals overload:
+if (someType is PrimitiveType pt && pt.Equals(PrimitiveType.Long))
+{
+    Console.WriteLine("This is a long.");
+}
+```
+
+### Inspecting a type's descriptor
+
+```csharp
+foreach (var prim in new[] {
+    PrimitiveType.Void, PrimitiveType.Boolean, PrimitiveType.Byte,
+    PrimitiveType.Short, PrimitiveType.Char,  PrimitiveType.Int,
+    PrimitiveType.Long, PrimitiveType.Float,  PrimitiveType.Double })
+{
+    Console.WriteLine($"{prim} -> descriptor '{prim.TypeDescriptor}'");
+}
+// Output:
+// V -> descriptor 'Void'
+// Z -> descriptor 'Boolean'
+// B -> descriptor 'Byte'
+// ...
+```
+
+---
+
+## Relationship to TypeDescriptor encoding
+
+`TypeDescriptor.Encode` converts any `TypeReference` to its Dalvik descriptor string. For primitives this is always a single character:
+
+```csharp
+TypeDescriptor.Encode(PrimitiveType.Int);     // "I"
+TypeDescriptor.Encode(PrimitiveType.Boolean); // "Z"
+TypeDescriptor.Encode(PrimitiveType.Double);  // "D"
+```
+
+See [TypeReference](/api/type-reference) for the full type hierarchy and descriptor encoding documentation.

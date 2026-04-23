@@ -1,0 +1,232 @@
+---
+title: "TypeReference and the Dexer type system"
+description: "TypeReference is the polymorphic base class for every type in Dexer — primitives, class references, and arrays all inherit from it."
+keywords: ["TypeReference", "ClassReference", "ArrayType", "CompositeType", "TypeDescriptors", "dex", "dexer", "type system"]
+---
+
+Every type that appears in a DEX file — whether a primitive like `int`, a class like `java.lang.String`, or an array like `byte[]` — is represented in Dexer as a `TypeReference`. The class is abstract and cannot be instantiated directly; you always work with one of its concrete subtypes. Dexer uses the `TypeDescriptors` enum, whose values are the literal characters of the Dalvik type descriptor notation, to identify which kind of type a given instance represents.
+
+## TypeReference (abstract base)
+
+`TypeReference` lives in the `Dexer.Core` namespace and implements `IEquatable<TypeReference>`.
+
+```csharp
+public abstract class TypeReference : IEquatable<TypeReference>
+```
+
+<ParamField path="TypeDescriptor" type="TypeDescriptors">
+  Internal discriminant that identifies which concrete subtype this instance is. The enum values correspond directly to the single-character Dalvik descriptor prefixes (`V`, `Z`, `B`, `S`, `C`, `I`, `J`, `F`, `D`, `L`, `[`).
+</ParamField>
+
+### Equality
+
+```csharp
+public virtual bool Equals(TypeReference other)
+```
+
+The base implementation compares `TypeDescriptor` values. Each concrete subtype overrides `Equals` to add type-specific checks — for example, `ClassReference` also compares `Fullname`, and `ArrayType` recursively compares `ElementType`.
+
+---
+
+## TypeDescriptors enum
+
+`TypeDescriptors` is defined in `Dexer.Metadata`. Each member's underlying value is the ASCII code of the corresponding Dalvik descriptor character, so casting a descriptor character to `TypeDescriptors` is always safe.
+
+```csharp
+public enum TypeDescriptors
+{
+    Void    = 'V',
+    Boolean = 'Z',
+    Byte    = 'B',
+    Short   = 'S',
+    Char    = 'C',
+    Int     = 'I',
+    Long    = 'J',
+    Float   = 'F',
+    Double  = 'D',
+    FullyQualifiedName = 'L',
+    Array   = '[',
+}
+```
+
+`TypeDescriptor.IsPrimitive(TypeDescriptors td)` returns `true` for all values except `Array` and `FullyQualifiedName`.
+
+---
+
+## Concrete subtypes
+
+<Tabs>
+  <Tab title="PrimitiveType">
+    `PrimitiveType` represents one of the nine built-in JVM primitive types. Instances are singletons — you never construct them yourself.
+
+    ```csharp
+    public class PrimitiveType : TypeReference
+    ```
+
+    Use the static properties directly:
+
+    ```csharp
+    TypeReference t = PrimitiveType.Int;    // TypeDescriptors.Int  ('I')
+    TypeReference v = PrimitiveType.Void;   // TypeDescriptors.Void ('V')
+    ```
+
+    `ToString()` returns the single-character descriptor string (e.g., `"I"` for `Int`).
+
+    See [PrimitiveType](/api/primitive-type) for the full singleton reference.
+  </Tab>
+
+  <Tab title="ClassReference">
+    `ClassReference` represents a reference to any Java or Android class. It extends `CompositeType` and implements `IMemberReference`.
+
+    ```csharp
+    public class ClassReference : CompositeType, IMemberReference
+    ```
+
+    **Constructor**
+
+    ```csharp
+    public ClassReference(string fullname)
+    ```
+
+    The constructor accepts a fully-qualified class name using either dot notation (`java.lang.String`) or internal slash notation (`java/lang/String`) — both are normalized to dot form on assignment.
+
+    **Properties**
+
+    <ParamField path="Fullname" type="string">
+      The fully-qualified class name in dot notation, e.g. `"java.lang.String"`. Setting this property parses the value into `Namespace` and `Name` components. Accepts both `.` and `/` as separators.
+    </ParamField>
+
+    <ParamField path="Namespace" type="string">
+      The package portion of the fully-qualified name, e.g. `"java.lang"`. Read-only; set via `Fullname`.
+    </ParamField>
+
+    <ParamField path="Name" type="string">
+      The simple class name without the package, e.g. `"String"`. Read-only; set via `Fullname`.
+    </ParamField>
+
+    **Constants**
+
+    | Constant | Value | Description |
+    |---|---|---|
+    | `NamespaceSeparator` | `'.'` | Separator used in `Fullname` |
+    | `InternalNamespaceSeparator` | `'/'` | DEX internal separator, normalized on input |
+
+    `ToString()` returns `Fullname` in dot notation — not the Dalvik descriptor form. The Dalvik descriptor encoding (`Ljava/lang/String;`) is produced by `TypeDescriptor.Encode(TypeReference)`.
+
+    **Example**
+
+    ```csharp
+    var stringType = new ClassReference("java.lang.String");
+    Console.WriteLine(stringType.Fullname);          // java.lang.String
+    Console.WriteLine(stringType.Namespace);         // java.lang
+    Console.WriteLine(stringType.Name);              // String
+    Console.WriteLine(TypeDescriptor.Encode(stringType)); // Ljava/lang/String;
+    ```
+  </Tab>
+
+  <Tab title="ArrayType">
+    `ArrayType` wraps any `TypeReference` to represent an array of that type. It also extends `CompositeType`.
+
+    ```csharp
+    public class ArrayType : CompositeType
+    ```
+
+    **Constructor**
+
+    ```csharp
+    public ArrayType(TypeReference elementType)
+    ```
+
+    **Property**
+
+    <ParamField path="ElementType" type="TypeReference" required>
+      The type of the array elements. Can be any `TypeReference`, including another `ArrayType` for multi-dimensional arrays.
+    </ParamField>
+
+    `ToString()` returns a bracketed form: `[ElementType.ToString()]`. The canonical Dalvik descriptor (e.g., `[I` for `int[]`) is produced by `TypeDescriptor.Encode`.
+
+    **Examples**
+
+    ```csharp
+    // int[]
+    var intArray = new ArrayType(PrimitiveType.Int);
+    Console.WriteLine(TypeDescriptor.Encode(intArray)); // [I
+
+    // String[]
+    var stringRef   = new ClassReference("java.lang.String");
+    var stringArray = new ArrayType(stringRef);
+    Console.WriteLine(TypeDescriptor.Encode(stringArray)); // [Ljava/lang/String;
+
+    // int[][] (two-dimensional)
+    var intArray2D = new ArrayType(new ArrayType(PrimitiveType.Int));
+    Console.WriteLine(TypeDescriptor.Encode(intArray2D)); // [[I
+    ```
+  </Tab>
+
+  <Tab title="CompositeType">
+    `CompositeType` is an intermediate abstract class that sits between `TypeReference` and the two non-primitive concrete types.
+
+    ```csharp
+    public abstract class CompositeType : TypeReference
+    ```
+
+    It carries no additional members. Its purpose is to provide a common base for `ClassReference` and `ArrayType`, making it possible to pattern-match or type-check against "any non-primitive type" with a single `is CompositeType` check.
+
+    ```csharp
+    if (someType is CompositeType)
+    {
+        // type is either a ClassReference or an ArrayType
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Dalvik descriptor notation
+
+The table below maps each `TypeDescriptors` value to its descriptor string, the corresponding Dexer type, and the C# equivalent.
+
+| Enum value | Descriptor | Dexer type | C# equivalent |
+|---|---|---|---|
+| `Void` | `V` | `PrimitiveType.Void` | `void` |
+| `Boolean` | `Z` | `PrimitiveType.Boolean` | `bool` |
+| `Byte` | `B` | `PrimitiveType.Byte` | `sbyte` |
+| `Short` | `S` | `PrimitiveType.Short` | `short` |
+| `Char` | `C` | `PrimitiveType.Char` | `char` |
+| `Int` | `I` | `PrimitiveType.Int` | `int` |
+| `Long` | `J` | `PrimitiveType.Long` | `long` |
+| `Float` | `F` | `PrimitiveType.Float` | `float` |
+| `Double` | `D` | `PrimitiveType.Double` | `double` |
+| `FullyQualifiedName` | `L<name>;` | `ClassReference` | any reference type |
+| `Array` | `[<type>` | `ArrayType` | any array type |
+
+---
+
+## Encoding and decoding descriptors
+
+`TypeDescriptor` (in `Dexer.Metadata`) provides static helpers for converting between `TypeReference` instances and their string descriptor representations.
+
+```csharp
+// Encode a single type to its descriptor string
+string descriptor = TypeDescriptor.Encode(PrimitiveType.Int);           // "I"
+string descriptor = TypeDescriptor.Encode(new ClassReference("java.lang.Object")); // "Ljava/lang/Object;"
+string descriptor = TypeDescriptor.Encode(new ArrayType(PrimitiveType.Boolean));   // "[Z"
+
+// Encode a full method prototype (return type first, then parameter types)
+string shorty = TypeDescriptor.Encode(prototype);
+```
+
+The `Allocate` and `Fill` internal methods are used by Dexer during DEX parsing to construct `TypeReference` instances from raw descriptor strings; they are not part of the public API.
+
+---
+
+## Inheritance hierarchy
+
+```
+TypeReference  (abstract)
+├── PrimitiveType
+└── CompositeType  (abstract)
+    ├── ClassReference
+    └── ArrayType
+```

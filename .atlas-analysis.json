@@ -1,0 +1,105 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Dexer",
+  "projectDescription": "A .NET library for reading, manipulating, and writing Android Dalvik Executable (.DEX) files.",
+  "theme": "luma",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart", "installation"]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/dex-format",
+              "concepts/object-model",
+              "concepts/type-system"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/reading-dex",
+              "guides/modifying-dex",
+              "guides/writing-dex",
+              "guides/working-with-instructions",
+              "guides/annotations",
+              "guides/exception-handling"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core",
+            "pages": [
+              "api/dex",
+              "api/class-definition",
+              "api/method-definition",
+              "api/field-definition",
+              "api/prototype"
+            ]
+          },
+          {
+            "group": "Instructions",
+            "pages": [
+              "api/instruction",
+              "api/method-body",
+              "api/opcodes",
+              "api/registers"
+            ]
+          },
+          {
+            "group": "Type System",
+            "pages": [
+              "api/type-reference",
+              "api/primitive-type",
+              "api/access-flags"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Read .DEX files from file path or stream",
+    "Write/serialize modified DEX back to file or stream",
+    "Full object model: classes, methods, fields, annotations",
+    "Instruction-level manipulation with full Dalvik opcode set",
+    "Exception handler and debug info support",
+    "Type system with primitive types, class references, and array types",
+    "Access flags for classes, methods, and fields",
+    "NuGet package targeting .NET Standard 2.0"
+  ],
+  "publicApiSurface": [
+    "Dex.Read(string filename)",
+    "Dex.Read(Stream stream)",
+    "Dex.Write(string filename)",
+    "Dex.Write(Stream stream)",
+    "Dex.GetClass(string fullname)",
+    "Dex.Import(ClassReference cref)",
+    "Dex.Import(MethodReference mref)",
+    "Dex.Import(TypeReference tref)",
+    "ClassDefinition.GetMethod(string name)",
+    "ClassDefinition.GetField(string name)",
+    "ClassDefinition.GetMethods(string name)",
+    "MethodDefinition.Body (MethodBody)",
+    "MethodBody.Instructions (List<Instruction>)",
+    "MethodBody.Registers (List<Register>)",
+    "MethodBody.Exceptions (List<ExceptionHandler>)",
+    "Instruction(OpCodes opcode, object operand, params Register[] registers)",
+    "Prototype(TypeReference returntype, params Parameter[] parameters)",
+    "PrimitiveType.Void / Boolean / Int / Long / Float / Double / etc.",
+    "AccessFlags (enum: Public, Private, Protected, Static, Final, ...)",
+    "OpCodes (enum: full Dalvik opcode set)"
+  ]
+}

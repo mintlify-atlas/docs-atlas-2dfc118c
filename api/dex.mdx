@@ -1,0 +1,182 @@
+---
+title: 'Dex — root container for a DEX file'
+description: 'The Dex class is the entry point for all read and write operations on Android Dalvik Executable files, holding the full class graph.'
+keywords: ['dex', 'dalvik', 'read', 'write', 'android', 'class definition']
+---
+
+The `Dex` class is the top-level object that represents a parsed `.dex` file. Every class, method, field, and prototype belonging to a single Dalvik Executable is reachable from this object. You obtain a `Dex` instance through one of the static `Read` overloads, manipulate its `Classes` list, and persist it back to disk or a stream using one of the `Write` overloads.
+
+Internally, `Dex` also maintains de-duplicated registries of type references, method references, field references, prototypes, and string literals. The `Import` methods let you register objects into these registries safely — they return the canonical instance when an equivalent entry already exists, avoiding duplicates in the output file.
+
+## Reading a DEX file
+
+Four static overloads are available for loading a DEX file. The `bufferize` parameter controls whether the raw bytes are first copied into a `MemoryStream` before parsing. Buffering (the default) is recommended for `FileStream` sources because it avoids repeated disk seeks during the parse pass.
+
+<ParamField path="filename" type="string" required>
+  Absolute or relative path to the `.dex` file on disk.
+</ParamField>
+
+<ParamField path="stream" type="Stream" required>
+  Any readable `Stream` containing raw DEX bytes.
+</ParamField>
+
+<ParamField path="bufferize" type="bool">
+  When `true` (the default), the input is copied to a `MemoryStream` before parsing. Set to `false` only when the source is already in memory.
+</ParamField>
+
+<ResponseField name="return" type="Dex">
+  A fully populated `Dex` instance with all classes, fields, methods, and annotations decoded.
+</ResponseField>
+
+```csharp
+// Read from a file path (bufferize = true by default)
+Dex dex = Dex.Read("classes.dex");
+
+// Read from a file path, skipping the memory-buffer step
+Dex dex = Dex.Read("classes.dex", bufferize: false);
+
+// Read from an arbitrary stream (bufferize = true by default)
+using FileStream fs = File.OpenRead("classes.dex");
+Dex dex = Dex.Read(fs);
+
+// Read from a stream with explicit bufferize control
+Dex dex = Dex.Read(fs, bufferize: false);
+```
+
+### Method signatures
+
+```csharp
+public static Dex Read(string filename)
+public static Dex Read(string filename, bool bufferize)
+public static Dex Read(Stream stream)
+public static Dex Read(Stream stream, bool bufferize)
+```
+
+## Writing a DEX file
+
+The instance `Write` overloads mirror the `Read` overloads exactly. When `bufferize` is `true` (the default), the serializer writes into an intermediate `MemoryStream` and then copies the completed bytes to the destination in one operation. This prevents a partially-written file if serialization fails mid-stream.
+
+<ParamField path="filename" type="string" required>
+  Destination file path. The file is created or overwritten.
+</ParamField>
+
+<ParamField path="stream" type="Stream" required>
+  A writable `Stream` to receive the serialized DEX bytes.
+</ParamField>
+
+<ParamField path="bufferize" type="bool">
+  When `true` (the default), output is staged in a `MemoryStream` and flushed atomically. Set to `false` to write directly to the destination stream.
+</ParamField>
+
+```csharp
+// Write to a file path
+dex.Write("output.dex");
+
+// Write with explicit bufferize control
+dex.Write("output.dex", bufferize: false);
+
+// Write to a stream
+using FileStream out = File.Create("output.dex");
+dex.Write(out);
+
+// Write to a stream, bypassing the intermediate buffer
+dex.Write(out, bufferize: false);
+```
+
+### Method signatures
+
+```csharp
+public void Write(string filename)
+public void Write(string filename, bool bufferize)
+public void Write(Stream stream)
+public void Write(Stream stream, bool bufferize)
+```
+
+## Properties
+
+<ParamField path="Classes" type="List<ClassDefinition>" required>
+  The collection of top-level class definitions stored in this DEX file. Inner classes are nested under their enclosing class via `ClassDefinition.InnerClasses` and do not appear at the top level of this list.
+</ParamField>
+
+## Looking up a class
+
+`GetClass` performs a recursive depth-first search across `Classes` and all nested `InnerClasses` lists, returning the first `ClassDefinition` whose `Fullname` matches the argument exactly.
+
+<ParamField path="fullname" type="string" required>
+  The fully qualified class name to search for, using dot-separated notation (e.g., `"com.example.MyClass"`).
+</ParamField>
+
+<ResponseField name="return" type="ClassDefinition?">
+  The matching `ClassDefinition`, or `null` if no class with that fully qualified name exists anywhere in the hierarchy.
+</ResponseField>
+
+```csharp
+Dex dex = Dex.Read("classes.dex");
+
+ClassDefinition? cls = dex.GetClass("com.example.MainActivity");
+if (cls is not null)
+{
+    Console.WriteLine($"Found: {cls.Fullname}");
+    Console.WriteLine($"Methods: {cls.Methods.Count}");
+}
+
+// Inner classes are also reachable
+ClassDefinition? inner = dex.GetClass("com.example.MainActivity$Builder");
+```
+
+### Method signature
+
+```csharp
+public ClassDefinition? GetClass(string fullname)
+```
+
+## Importing references
+
+The `Import` methods register an object into the internal reference registries. They deduplicate by equality: if an equivalent reference is already known, the existing canonical instance is returned. Use these methods when building or modifying a DEX programmatically to ensure only one copy of each reference ends up in the output file.
+
+<ParamField path="cref" type="ClassReference" required>
+  The class reference to register.
+</ParamField>
+
+<ParamField path="mref" type="MethodReference" required>
+  The method reference to register.
+</ParamField>
+
+<ParamField path="tref" type="TypeReference" required>
+  The type reference to register.
+</ParamField>
+
+<ResponseField name="return (ClassReference)" type="ClassReference">
+  The canonical `ClassReference` in the registry — either the existing entry or `cref` itself if it was newly added.
+</ResponseField>
+
+<ResponseField name="return (MethodReference)" type="MethodReference">
+  The canonical `MethodReference` in the registry — either the existing entry or `mref` itself if it was newly added.
+</ResponseField>
+
+<ResponseField name="return (TypeReference)" type="TypeReference">
+  The canonical `TypeReference` in the registry — either the existing entry or `tref` itself if it was newly added.
+</ResponseField>
+
+```csharp
+Dex dex = Dex.Read("classes.dex");
+
+// Import a class reference — returns the canonical instance
+var stringRef = new ClassReference("java.lang.String");
+ClassReference canonical = dex.Import(stringRef);
+
+// Import a method reference
+var methodRef = new MethodReference(owner, "toString", prototype);
+MethodReference canonicalMethod = dex.Import(methodRef);
+
+// Import a primitive or array type reference
+TypeReference intType = dex.Import(PrimitiveType.Int);
+```
+
+### Method signatures
+
+```csharp
+public ClassReference Import(ClassReference cref)
+public MethodReference Import(MethodReference mref)
+public TypeReference Import(TypeReference tref)
+```

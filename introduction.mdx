@@ -1,0 +1,88 @@
+---
+title: "Introduction to Dexer"
+description: "Dexer is an open source .NET library for reading, modifying, and writing Android Dalvik Executable (.DEX) files with a rich object model."
+keywords: ["dexer", "dex", "dalvik", "android", "reverse engineering", "dotnet", "nuget"]
+---
+
+Dexer is a .NET library that gives you full read-write access to Android Dalvik Executable (`.DEX`) files — the binary format that contains compiled bytecode for the Android Runtime. Whether you are building analysis tools, security research utilities, or automated patching pipelines, Dexer lets you treat a DEX file as a structured object model rather than raw bytes.
+
+## What you can do
+
+Dexer exposes the complete structure of a DEX file through strongly-typed C# objects. Once you load a file, you can traverse every class, method, field, and annotation it contains, read or rewrite individual bytecode instructions, and serialize the result back to a valid DEX file that Android tooling will accept.
+
+<CardGroup cols={2}>
+  <Card title="Read DEX files" icon="file-import" href="/guides/reading-dex">
+    Parse any `.DEX` file from a file path or a `Stream` into a navigable object model.
+  </Card>
+  <Card title="Inspect classes and methods" icon="sitemap" href="/api/class-definition">
+    Walk the class hierarchy, read access flags, inspect method signatures and annotations.
+  </Card>
+  <Card title="Modify bytecode" icon="pen-to-square" href="/guides/working-with-instructions">
+    Replace opcodes, rewrite string constants, add new instructions, and inject method calls.
+  </Card>
+  <Card title="Write DEX files" icon="file-export" href="/guides/writing-dex">
+    Serialize the modified object model back to a file or stream, with checksums recalculated automatically.
+  </Card>
+</CardGroup>
+
+## Key characteristics
+
+| Property | Value |
+|----------|-------|
+| Target framework | .NET Standard 2.0 |
+| Compatible runtimes | .NET 6+, .NET Framework 4.6.1+, Mono, Unity |
+| Distribution | [NuGet — `Dexer`](https://www.nuget.org/packages/Dexer/) |
+| License | MIT |
+| Source | [github.com/sailro/Dexer](https://github.com/sailro/Dexer) |
+
+<Note>
+  Because Dexer targets .NET Standard 2.0, you can use it from any runtime that implements that standard — including .NET 6 and later, .NET Framework 4.6.1 and later, Mono, and Xamarin.
+</Note>
+
+## Object model overview
+
+At the top of the hierarchy sits the `Dex` class. It holds a flat list of `ClassDefinition` objects. Each `ClassDefinition` contains lists of `MethodDefinition` and `FieldDefinition` objects, along with access flags, annotations, implemented interfaces, and inner classes. Each `MethodDefinition` optionally carries a `MethodBody` that contains the list of `Instruction` objects you can read and rewrite.
+
+```
+Dex
+└── ClassDefinition[]          (dex.Classes)
+    ├── FieldDefinition[]      (cdef.Fields)
+    └── MethodDefinition[]     (cdef.Methods)
+        └── MethodBody
+            ├── Instruction[]  (body.Instructions)
+            └── Register[]     (body.Registers)
+```
+
+## Typical use cases
+
+<AccordionGroup>
+  <Accordion title="Android reverse engineering">
+    Read a DEX file extracted from an APK, navigate to a specific class or method, and inspect its bytecode to understand what the application is doing at runtime.
+  </Accordion>
+  <Accordion title="Automated patching">
+    Load a DEX file, locate a target method by class and method name, replace one or more instructions, and write the patched file back — without disassembling or recompiling the full APK.
+  </Accordion>
+  <Accordion title="Static analysis tooling">
+    Iterate over every `ClassDefinition` and `MethodDefinition` in a DEX file to build call graphs, detect API usage patterns, or flag suspicious opcode sequences.
+  </Accordion>
+  <Accordion title="Test instrumentation">
+    Inject method calls or logging instructions into existing methods before running tests, without modifying the original source code.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install Dexer and write working code in under five minutes.
+  </Card>
+  <Card title="Installation" icon="package" href="/installation">
+    Full installation options, project setup, and namespace imports.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/dex">
+    Complete reference for all public types and members.
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/dex-format">
+    Understand the DEX binary format and how Dexer maps it to objects.
+  </Card>
+</CardGroup>

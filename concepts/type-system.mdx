@@ -1,0 +1,266 @@
+---
+title: "Type System: References, Primitives, and Arrays"
+description: "How Dexer models Dalvik types — PrimitiveType singletons, ClassReference names, ArrayType wrappers, and JVM descriptor encoding via TypeDescriptor."
+---
+
+Every value in the Dalvik virtual machine has a type, and Dexer represents every one of those types as a subclass of the abstract `TypeReference`. The hierarchy is deliberately small: primitives are shared singletons, class types carry a fully-qualified name, and arrays wrap any other type reference. A separate encoding layer — `TypeDescriptor` — converts between these C# objects and the compact JVM descriptor strings stored in the DEX binary.
+
+## TypeReference: the common base
+
+`TypeReference` is the abstract root of the entire type hierarchy. It holds a single `TypeDescriptors` enum value used for equality and encoding:
+
+```csharp
+// Dexer.Core.TypeReference
+public abstract class TypeReference : IEquatable<TypeReference>
+{
+    internal TypeDescriptors TypeDescriptor { get; set; }
+
+    public virtual bool Equals(TypeReference other);
+}
+```
+
+Every field type, method return type, parameter type, and array element type is stored as a `TypeReference`. Because it is abstract, you always work with one of its concrete subclasses.
+
+## The type hierarchy
+
+```
+TypeReference  (abstract)
+├── PrimitiveType         — Void, Boolean, Byte, Short, Char, Int, Long, Float, Double
+└── CompositeType  (abstract)
+      ├── ClassReference  — any Java/Android class by fully-qualified name
+      │     └── ClassDefinition  — a class defined in this DEX file
+      └── ArrayType       — wraps any TypeReference as a single-dimensional array
+```
+
+<Note>
+`CompositeType` is a thin abstract layer between `TypeReference` and the two concrete composite types. It carries no additional members — its purpose is to group the types that can be legally used as array element types or as method owners.
+</Note>
+
+## PrimitiveType
+
+`PrimitiveType` represents the nine Dalvik primitive types. Each is exposed as a `static readonly` singleton — you never instantiate `PrimitiveType` directly:
+
+```csharp
+// Dexer.Core.PrimitiveType
+public class PrimitiveType : TypeReference
+{
+    public static readonly PrimitiveType Void    = new(TypeDescriptors.Void);    // V
+    public static readonly PrimitiveType Boolean = new(TypeDescriptors.Boolean); // Z
+    public static readonly PrimitiveType Byte    = new(TypeDescriptors.Byte);    // B
+    public static readonly PrimitiveType Short   = new(TypeDescriptors.Short);   // S
+    public static readonly PrimitiveType Char    = new(TypeDescriptors.Char);    // C
+    public static readonly PrimitiveType Int     = new(TypeDescriptors.Int);     // I
+    public static readonly PrimitiveType Long    = new(TypeDescriptors.Long);    // J
+    public static readonly PrimitiveType Float   = new(TypeDescriptors.Float);   // F
+    public static readonly PrimitiveType Double  = new(TypeDescriptors.Double);  // D
+
+    private PrimitiveType(TypeDescriptors typeDescriptor) { ... }
+}
+```
+
+Use them directly in `Prototype` definitions:
+
+```csharp
+// Build the prototype for: int add(int a, int b)
+var prototype = new Prototype(
+    PrimitiveType.Int,
+    new Parameter(PrimitiveType.Int),
+    new Parameter(PrimitiveType.Int)
+);
+
+// Build the prototype for: void run()
+var voidPrototype = new Prototype(PrimitiveType.Void);
+```
+
+<Tip>
+Because the singletons are reference-equal objects, equality checks on `PrimitiveType` are fast identity comparisons backed by `TypeDescriptors` enum matching. Never allocate new primitive type instances.
+</Tip>
+
+## ClassReference
+
+`ClassReference` represents any Java or Android class by its fully-qualified dot-separated name. It splits the name into `Namespace` and `Name` automatically:
+
+```csharp
+// Dexer.Core.ClassReference
+public class ClassReference : CompositeType, IMemberReference
+{
+    public const char NamespaceSeparator         = '.';
+    public const char InternalNamespaceSeparator = '/';
+
+    public string Namespace { get; private set; }
+    public string Name      { get; private set; }
+
+    // Setting Fullname parses namespace and name from "java.lang.String"
+    // and normalises internal slashes ("java/lang/String" → "java.lang.String")
+    public string Fullname { get; set; }
+
+    public ClassReference(string fullname) { ... }
+}
+```
+
+Constructing a `ClassReference` for a well-known Android type:
+
+```csharp
+var stringRef   = new ClassReference("java.lang.String");
+var intentRef   = new ClassReference("android.content.Intent");
+var bundleRef   = new ClassReference("android.os.Bundle");
+
+Console.WriteLine(stringRef.Namespace); // "java.lang"
+Console.WriteLine(stringRef.Name);      // "String"
+Console.WriteLine(stringRef.Fullname);  // "java.lang.String"
+```
+
+Use `ClassReference` for the owner of `FieldReference` and as a superclass or interface reference on `ClassDefinition`:
+
+```csharp
+ClassDefinition? myClass = dex.GetClass("com.example.MainActivity");
+Console.WriteLine(myClass!.SuperClass?.Fullname); // "android.app.Activity"
+
+foreach (ClassReference iface in myClass.Interfaces)
+    Console.WriteLine(iface.Fullname);
+```
+
+To register a new class reference into the Dexer pool for use during writing, call `Dex.Import`:
+
+```csharp
+ClassReference imported = dex.Import(new ClassReference("java.lang.Runnable"));
+```
+
+## ArrayType
+
+`ArrayType` wraps any `TypeReference` to produce a single-dimensional array of that element type. Multi-dimensional arrays are modelled by nesting — an `ArrayType` whose `ElementType` is itself an `ArrayType`:
+
+```csharp
+// Dexer.Core.ArrayType
+public class ArrayType : CompositeType
+{
+    public TypeReference ElementType { get; set; }
+
+    public ArrayType(TypeReference elementType)
+    {
+        ElementType    = elementType;
+        TypeDescriptor = TypeDescriptors.Array;
+    }
+}
+```
+
+```csharp
+// int[]
+var intArray = new ArrayType(PrimitiveType.Int);
+
+// String[]
+var stringArray = new ArrayType(new ClassReference("java.lang.String"));
+
+// int[][] (two-dimensional)
+var intMatrix = new ArrayType(new ArrayType(PrimitiveType.Int));
+
+// Use in a Prototype: byte[] getData(String key)
+var proto = new Prototype(
+    new ArrayType(PrimitiveType.Byte),
+    new Parameter(new ClassReference("java.lang.String"))
+);
+```
+
+`ArrayType.ToString()` renders with square-bracket notation (`[int]`, `[[int]]`) rather than JVM descriptor syntax, matching Dexer's internal display convention.
+
+## Type descriptors: JVM encoding
+
+The DEX binary stores all type references as compact JVM descriptor strings. `TypeDescriptors` is the enum that maps each string prefix to a kind, and `TypeDescriptor` is the static utility class that encodes and decodes these strings:
+
+```csharp
+// Dexer.Metadata.TypeDescriptors
+public enum TypeDescriptors
+{
+    Void    = 'V',
+    Boolean = 'Z',
+    Byte    = 'B',
+    Short   = 'S',
+    Char    = 'C',
+    Int     = 'I',
+    Long    = 'J',
+    Float   = 'F',
+    Double  = 'D',
+    FullyQualifiedName = 'L',  // class type: "Ljava/lang/String;"
+    Array              = '[',  // array type: "[I", "[[B", "[Ljava/lang/String;"
+}
+```
+
+<AccordionGroup>
+  <Accordion title="Descriptor encoding table">
+
+| Dexer type | JVM descriptor | Example |
+|---|---|---|
+| `PrimitiveType.Void` | `V` | return type only |
+| `PrimitiveType.Boolean` | `Z` | `Z` |
+| `PrimitiveType.Byte` | `B` | `B` |
+| `PrimitiveType.Short` | `S` | `S` |
+| `PrimitiveType.Char` | `C` | `C` |
+| `PrimitiveType.Int` | `I` | `I` |
+| `PrimitiveType.Long` | `J` | `J` |
+| `PrimitiveType.Float` | `F` | `F` |
+| `PrimitiveType.Double` | `D` | `D` |
+| `ClassReference("java.lang.String")` | `Ljava/lang/String;` | note leading `L`, trailing `;`, `/` separators |
+| `ArrayType(PrimitiveType.Int)` | `[I` | |
+| `ArrayType(ArrayType(PrimitiveType.Byte))` | `[[B` | |
+| `ArrayType(ClassReference("java.lang.Object"))` | `[Ljava/lang/Object;` | |
+
+  </Accordion>
+  <Accordion title="Shorty descriptors">
+    Prototype entries in the DEX binary also store a *shorty* descriptor — a compressed form where every reference type (class or array) is collapsed to a single `L` character. Dexer computes shorty descriptors automatically via `TypeDescriptor.Encode(prototype)` when writing. You do not need to construct them manually.
+  </Accordion>
+</AccordionGroup>
+
+`TypeDescriptor` exposes the encode direction publicly:
+
+```csharp
+// Dexer.Metadata.TypeDescriptor
+public static string Encode(TypeReference tref);      // full descriptor
+public static string Encode(Prototype prototype);     // shorty (return + params)
+public static bool   IsPrimitive(TypeDescriptors td); // true for non-array, non-class
+```
+
+Encoding examples:
+
+```csharp
+using Dexer.Metadata;
+using Dexer.Core;
+
+// Primitive
+Console.WriteLine(TypeDescriptor.Encode(PrimitiveType.Int));    // "I"
+Console.WriteLine(TypeDescriptor.Encode(PrimitiveType.Long));   // "J"
+
+// Class
+Console.WriteLine(TypeDescriptor.Encode(new ClassReference("java.lang.String")));
+// "Ljava/lang/String;"
+
+// Array of int
+Console.WriteLine(TypeDescriptor.Encode(new ArrayType(PrimitiveType.Int)));
+// "[I"
+
+// Prototype shorty for: int foo(String, boolean)
+var proto = new Prototype(
+    PrimitiveType.Int,
+    new Parameter(new ClassReference("java.lang.String")),
+    new Parameter(PrimitiveType.Boolean)
+);
+Console.WriteLine(TypeDescriptor.Encode(proto)); // "ILZ"
+```
+
+## Identifying a type at runtime
+
+Because `TypeReference` is polymorphic, use pattern matching to distinguish kinds:
+
+```csharp
+static string Describe(TypeReference t) => t switch
+{
+    PrimitiveType p  => $"primitive {p}",
+    ArrayType a      => $"array of {Describe(a.ElementType)}",
+    ClassDefinition d=> $"defined class {d.Fullname}",
+    ClassReference c => $"referenced class {c.Fullname}",
+    _                => "unknown"
+};
+```
+
+<Warning>
+Never use `typeof()` comparisons against `ClassReference` to detect defined classes — a `ClassDefinition` *is* a `ClassReference`, so `t is ClassReference` matches both. Always check for `ClassDefinition` first in pattern-matching chains.
+</Warning>

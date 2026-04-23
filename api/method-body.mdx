@@ -1,0 +1,183 @@
+---
+title: "MethodBody — method code and metadata"
+description: "Reference for MethodBody, ExceptionHandler, Catch, and DebugInfo — the types that hold a method's instructions, exception tables, and debug information."
+keywords: ["method body", "instructions", "exception handler", "debug info", "registers", "dalvik"]
+---
+
+`MethodBody` holds everything that constitutes the executable portion of a method: a pre-allocated register pool, a flat list of `Instruction` objects, a set of `ExceptionHandler` entries that describe try/catch regions, and an optional `DebugInfo` block that maps instructions back to source lines and local variable names.
+
+You access a method's body through `MethodDefinition.Body`. Dexer populates the body when reading a DEX file, and serializes it back during write.
+
+## `MethodBody`
+
+### Constructor
+
+<ParamField path="MethodBody(MethodDefinition method, int registersSize)" type="constructor">
+  Creates a new body owned by `method` and pre-fills the `Registers` list with `registersSize` sequential `Register` objects (index 0 through `registersSize - 1`).
+
+  | Parameter       | Type               | Description                                                |
+  |-----------------|--------------------|------------------------------------------------------------|
+  | `method`        | `MethodDefinition` | The method this body belongs to.                           |
+  | `registersSize` | `int`              | Total number of registers the method uses, including parameter registers. |
+</ParamField>
+
+### Properties
+
+<ParamField path="Owner" type="MethodDefinition" required>
+  Back-reference to the `MethodDefinition` that owns this body.
+</ParamField>
+
+<ParamField path="Registers" type="List&lt;Register&gt;" required>
+  Pre-allocated pool of `Register` objects, one per Dalvik register (v0, v1, …). The pool is populated by the constructor. Use `Registers[n]` to obtain the register at index *n* when building instructions. See [Register](/api/registers).
+</ParamField>
+
+<ParamField path="Instructions" type="List&lt;Instruction&gt;" required>
+  The ordered sequence of Dalvik instructions that make up the method's code. Dexer serializes this list in order, computing byte offsets as it goes. See [Instruction](/api/instruction).
+</ParamField>
+
+<ParamField path="Exceptions" type="List&lt;ExceptionHandler&gt;" required>
+  Exception handlers (try/catch blocks) that apply to ranges within `Instructions`. Each `ExceptionHandler` specifies a try region and one or more handler targets.
+</ParamField>
+
+<ParamField path="DebugInfo" type="DebugInfo?" >
+  Optional debug metadata, including source line numbers and local variable names. `null` when the method has no debug information (e.g., stripped release builds).
+</ParamField>
+
+<ParamField path="IncomingArguments" type="ushort">
+  The number of argument registers passed into the method. For instance methods, this includes the implicit `this` reference. Dexer reads this from the DEX file and uses it to distinguish parameter registers from local registers.
+</ParamField>
+
+<ParamField path="OutgoingArguments" type="ushort">
+  The number of argument registers reserved for outgoing calls made from within this method. This is the maximum argument count across all call sites inside the method body.
+</ParamField>
+
+### Example — appending an instruction
+
+```csharp
+using Dexer.Instructions;
+
+MethodBody body = method.Body;
+
+// Append a const/4 v0, 1 instruction
+Register v0 = body.Registers[0];
+body.Instructions.Add(new Instruction(OpCodes.Const4, 1, v0));
+
+// Append return-void
+body.Instructions.Add(new Instruction(OpCodes.ReturnVoid));
+```
+
+---
+
+## `ExceptionHandler`
+
+`ExceptionHandler` describes a single try/catch region. The try block spans from `TryStart` (inclusive) to `TryEnd` (exclusive). Each handler is either typed (a `Catch` entry) or untyped (`CatchAll`).
+
+### Constructor
+
+<ParamField path="ExceptionHandler(Instruction tryStart, Instruction tryEnd)" type="constructor">
+  | Parameter  | Type          | Description                                              |
+  |------------|---------------|----------------------------------------------------------|
+  | `tryStart` | `Instruction` | First instruction of the protected try block.            |
+  | `tryEnd`   | `Instruction` | First instruction *after* the try block (exclusive).     |
+</ParamField>
+
+### Properties
+
+<ParamField path="TryStart" type="Instruction" required>
+  The first instruction inside the try block. Must be a reference to an `Instruction` in `MethodBody.Instructions`.
+</ParamField>
+
+<ParamField path="TryEnd" type="Instruction" required>
+  The instruction immediately after the last instruction of the try block. In the DEX format, the try region is a half-open interval `[TryStart, TryEnd)`.
+</ParamField>
+
+<ParamField path="CatchAll" type="Instruction?">
+  Handler entry point for a catch-all (`catch Throwable`) clause. Set to `null` if there is no catch-all for this handler. When present, this instruction executes for any exception type not matched by a typed `Catch` entry.
+</ParamField>
+
+<ParamField path="Catches" type="List&lt;Catch&gt;" required>
+  Ordered list of typed exception handlers. Dexer checks each entry in order and jumps to the first one whose `Type` is assignable from the thrown exception.
+</ParamField>
+
+### Example — adding a try/catch block
+
+```csharp
+using Dexer.Instructions;
+using Dexer.Core;
+
+MethodBody body = method.Body;
+
+// Assume body.Instructions already contains instructions at indices 0-9
+Instruction tryStart  = body.Instructions[2];
+Instruction tryEnd    = body.Instructions[7];
+Instruction catchBody = body.Instructions[8]; // handler entry point
+
+// Resolve the exception type
+ClassReference ioException = dex.GetClass("java.io.IOException");
+
+var handler = new ExceptionHandler(tryStart, tryEnd);
+handler.Catches.Add(new Catch(ioException, catchBody));
+
+body.Exceptions.Add(handler);
+```
+
+---
+
+## `Catch`
+
+A `Catch` pairs a typed exception class with the handler instruction to jump to when that exception is thrown.
+
+### Constructor
+
+<ParamField path="Catch(TypeReference type, Instruction instruction)" type="constructor">
+  | Parameter     | Type            | Description                                          |
+  |---------------|-----------------|------------------------------------------------------|
+  | `type`        | `TypeReference` | The exception type this clause catches.              |
+  | `instruction` | `Instruction`   | The first instruction of the handler block.          |
+</ParamField>
+
+### Properties
+
+<ParamField path="Type" type="TypeReference" required>
+  The exception class this clause handles. Must be a `ClassReference` (or any `TypeReference` subtype that resolves to a class), such as `java.lang.RuntimeException`.
+</ParamField>
+
+<ParamField path="Instruction" type="Instruction" required>
+  The handler entry point — the first instruction that executes when this exception type is caught. Typically a `MoveException` instruction that saves the exception object into a register.
+</ParamField>
+
+---
+
+## `DebugInfo`
+
+`DebugInfo` stores the source-level information that debuggers use to map bytecode back to the original source code: parameter names, line numbers, and a sequence of `DebugInstruction` opcodes.
+
+### Constructor
+
+<ParamField path="DebugInfo(MethodBody body)" type="constructor">
+  | Parameter | Type         | Description                               |
+  |-----------|--------------|-------------------------------------------|
+  | `body`    | `MethodBody` | The method body this debug info belongs to. |
+</ParamField>
+
+### Properties
+
+<ParamField path="Owner" type="MethodBody" required>
+  Back-reference to the owning `MethodBody`.
+</ParamField>
+
+<ParamField path="LineStart" type="uint" required>
+  The source line number of the first instruction in the method. Subsequent line changes are encoded as deltas in the `DebugInstructions` sequence.
+</ParamField>
+
+<ParamField path="Parameters" type="List&lt;string?&gt;" required>
+  Parameter names in declaration order, excluding the implicit `this` for instance methods. A `null` entry means the parameter has no name in the debug information (common in obfuscated code).
+</ParamField>
+
+<ParamField path="DebugInstructions" type="List&lt;DebugInstruction&gt;" required>
+  Sequence of `DebugInstruction` values that encode line-number advances, local variable start/end scopes, and other debug state changes. Each `DebugInstruction` has a `DebugOpCodes` opcode and a `List<object?> Operands` list. Common opcodes include `AdvancePc`, `AdvanceLine`, `StartLocal`, `StartLocalExtended`, `EndLocal`, `RestartLocal`, `SetPrologueEnd`, `SetEpilogueBegin`, `SetFile`, and `EndSequence`.
+</ParamField>
+
+<Note>
+  `DebugInfo` is optional. Dexer reads it when present and omits it from output when `MethodBody.DebugInfo` is `null`. Stripping debug info reduces DEX file size but makes debugging and decompilation harder.
+</Note>

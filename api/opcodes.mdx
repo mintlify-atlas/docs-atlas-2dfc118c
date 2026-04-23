@@ -1,0 +1,454 @@
+---
+title: "OpCodes — Dalvik instruction set reference"
+description: "Complete enumeration of Dalvik OpCodes values used by Dexer's Instruction class, organized by category with hex values and encoding notes."
+keywords: ["opcodes", "dalvik", "instruction set", "bytecode", "enum", "dex"]
+---
+
+`OpCodes` is a C# `enum` in the `Dexer.Instructions` namespace. Every member maps directly to a Dalvik bytecode value as specified in the Android DEX format. You assign a member to `Instruction.OpCode` to set what an instruction does; Dexer uses the value to determine the instruction's encoding size and operand format during serialization.
+
+The `Nop` opcode (`0x00`) is also used as the padding byte between code sections. The pseudo-opcode table (`PseudoOpCodes`) contains three additional values — `PackedSwitch` (`0x0100`), `SparseSwitch` (`0x0200`), and `FillArrayData` (`0x0300`) — that represent out-of-line data blocks written after the main instruction stream; you do not set these directly on an `Instruction`.
+
+<AccordionGroup>
+
+  <Accordion title="Move operations">
+    Move instructions copy register values between registers. The suffix indicates the register width or addressing mode: `Wide` operates on 64-bit (long/double) register pairs, `Object` preserves the GC reference type, `From16` / `16` allow larger register indices.
+
+    | Name               | Hex    | Encoding        |
+    |--------------------|--------|-----------------|
+    | `Move`             | `0x01` | vA, vB          |
+    | `MoveFrom16`       | `0x02` | vAA, vBBBB      |
+    | `Move16`           | `0x03` | vAAAA, vBBBB    |
+    | `MoveWide`         | `0x04` | vA, vB          |
+    | `MoveWideFrom16`   | `0x05` | vAA, vBBBB      |
+    | `MoveWide16`       | `0x06` | vAAAA, vBBBB    |
+    | `MoveObject`       | `0x07` | vA, vB          |
+    | `MoveObjectFrom16` | `0x08` | vAA, vBBBB      |
+    | `MoveObject16`     | `0x09` | vAAAA, vBBBB    |
+    | `MoveResult`       | `0x0a` | vAA             |
+    | `MoveResultWide`   | `0x0b` | vAA             |
+    | `MoveResultObject` | `0x0c` | vAA             |
+    | `MoveException`    | `0x0d` | vAA             |
+
+    `MoveResult*` must be the instruction immediately following an `invoke-*` or `filled-new-array` instruction. `MoveException` must be the first instruction of an exception handler block.
+  </Accordion>
+
+  <Accordion title="Return operations">
+    Return instructions exit the current method and optionally pass a value back to the caller.
+
+    | Name           | Hex    | Encoding |
+    |----------------|--------|----------|
+    | `ReturnVoid`   | `0x0e` | (none)   |
+    | `Return`       | `0x0f` | vAA      |
+    | `ReturnWide`   | `0x10` | vAA      |
+    | `ReturnObject` | `0x11` | vAA      |
+
+    Use `ReturnVoid` for `void` methods. `ReturnWide` is for `long` or `double` return types.
+  </Accordion>
+
+  <Accordion title="Constant loading">
+    Const instructions load an immediate literal value into a register. The `Instruction.Operand` must be the literal value (`int` or `long`), except for string and class constants which use `string` and `TypeReference` respectively.
+
+    | Name                | Hex    | Encoding             | Notes                                 |
+    |---------------------|--------|----------------------|---------------------------------------|
+    | `Const4`            | `0x12` | vA, #+B              | 4-bit signed literal                  |
+    | `Const16`           | `0x13` | vAA, #+BBBB          | 16-bit signed literal                 |
+    | `Const`             | `0x14` | vAA, #+BBBBBBBB      | 32-bit literal                        |
+    | `ConstHigh16`       | `0x15` | vAA, #+BBBB0000      | High 16 bits; low 16 set to zero      |
+    | `ConstWide16`       | `0x16` | vAA, #+BBBB          | 16-bit sign-extended to 64 bits       |
+    | `ConstWide32`       | `0x17` | vAA, #+BBBBBBBB      | 32-bit sign-extended to 64 bits       |
+    | `ConstWide`         | `0x18` | vAA, #+BBBBBBBBBBBBBBBB | 64-bit literal                     |
+    | `ConstWideHigh16`   | `0x19` | vAA, #+BBBB000000000000 | High 16 bits; low 48 set to zero  |
+    | `ConstString`       | `0x1a` | vAA, string@BBBB     | Operand: `string`                     |
+    | `ConstStringJumbo`  | `0x1b` | vAA, string@BBBBBBBB | Operand: `string`, large string pool  |
+    | `ConstClass`        | `0x1c` | vAA, type@BBBB       | Operand: `TypeReference`              |
+  </Accordion>
+
+  <Accordion title="Monitor">
+    Monitor instructions implement Java `synchronized` blocks.
+
+    | Name           | Hex    | Encoding |
+    |----------------|--------|----------|
+    | `MonitorEnter` | `0x1d` | vAA      |
+    | `MonitorExit`  | `0x1e` | vAA      |
+  </Accordion>
+
+  <Accordion title="Type operations">
+    These instructions check, cast, and create object instances and arrays.
+
+    | Name                  | Hex    | Encoding                  | Operand           |
+    |-----------------------|--------|---------------------------|-------------------|
+    | `CheckCast`           | `0x1f` | vAA, type@BBBB            | `TypeReference`   |
+    | `InstanceOf`          | `0x20` | vA, vB, type@CCCC         | `TypeReference`   |
+    | `ArrayLength`         | `0x21` | vA, vB                    | (none)            |
+    | `NewInstance`         | `0x22` | vAA, type@BBBB            | `TypeReference`   |
+    | `NewArray`            | `0x23` | vA, vB, type@CCCC         | `TypeReference`   |
+    | `FilledNewArray`      | `0x24` | \{vD,vE,vF,vG,vA\}, type@CCCC | `TypeReference` |
+    | `FilledNewArrayRange` | `0x25` | \{vCCCC..vNNNN\}, type@BBBB | `TypeReference`   |
+    | `FillArrayData`       | `0x26` | vAA, #+BBBBBBBB           | `Array` (sbyte/short/int/long) |
+  </Accordion>
+
+  <Accordion title="Control flow">
+    Control-flow instructions redirect execution. All branch operands in Dexer are `Instruction` object references; offsets are computed automatically during write.
+
+    **Unconditional jumps**
+
+    | Name      | Hex    | Encoding  | Range         |
+    |-----------|--------|-----------|---------------|
+    | `Goto`    | `0x28` | +AA       | 8-bit offset  |
+    | `Goto16`  | `0x29` | +AAAA     | 16-bit offset |
+    | `Goto32`  | `0x2a` | +AAAAAAAA | 32-bit offset |
+
+    **Switch**
+
+    | Name           | Hex    | Operand            |
+    |----------------|--------|--------------------|
+    | `PackedSwitch` | `0x2b` | `PackedSwitchData` |
+    | `SparseSwitch` | `0x2c` | `SparseSwitchData` |
+
+    **Throw**
+
+    | Name    | Hex    | Encoding |
+    |---------|--------|----------|
+    | `Throw` | `0x27` | vAA      |
+
+    **Two-register conditional branches** (branch when vA `op` vB)
+
+    | Name   | Hex    | Condition          |
+    |--------|--------|--------------------|
+    | `IfEq` | `0x32` | vA equal to vB           |
+    | `IfNe` | `0x33` | vA not equal to vB       |
+    | `IfLt` | `0x34` | vA less than vB          |
+    | `IfGe` | `0x35` | vA greater or equal to vB|
+    | `IfGt` | `0x36` | vA greater than vB       |
+    | `IfLe` | `0x37` | vA less or equal to vB   |
+
+    **Zero-compare conditional branches** (branch when vAA compared to 0)
+
+    | Name     | Hex    | Condition             |
+    |----------|--------|-----------------------|
+    | `IfEqz`  | `0x38` | vAA equal to 0        |
+    | `IfNez`  | `0x39` | vAA not equal to 0    |
+    | `IfLtz`  | `0x3a` | vAA less than 0       |
+    | `IfGez`  | `0x3b` | vAA greater or equal 0|
+    | `IfGtz`  | `0x3c` | vAA greater than 0    |
+    | `IfLez`  | `0x3d` | vAA less or equal 0   |
+  </Accordion>
+
+  <Accordion title="Array access">
+    Array get (`aget`) and put (`aput`) instructions read and write individual array elements.
+
+    | Name           | Hex    | Encoding      |
+    |----------------|--------|---------------|
+    | `Aget`         | `0x44` | vAA, vBB, vCC |
+    | `AgetWide`     | `0x45` | vAA, vBB, vCC |
+    | `AgetObject`   | `0x46` | vAA, vBB, vCC |
+    | `AgetBoolean`  | `0x47` | vAA, vBB, vCC |
+    | `AgetByte`     | `0x48` | vAA, vBB, vCC |
+    | `AgetChar`     | `0x49` | vAA, vBB, vCC |
+    | `AgetShort`    | `0x4a` | vAA, vBB, vCC |
+    | `Aput`         | `0x4b` | vAA, vBB, vCC |
+    | `AputWide`     | `0x4c` | vAA, vBB, vCC |
+    | `AputObject`   | `0x4d` | vAA, vBB, vCC |
+    | `AputBoolean`  | `0x4e` | vAA, vBB, vCC |
+    | `AputByte`     | `0x4f` | vAA, vBB, vCC |
+    | `AputChar`     | `0x50` | vAA, vBB, vCC |
+    | `AputShort`    | `0x51` | vAA, vBB, vCC |
+
+    Operand layout: result/value register (vAA), array reference (vBB), index (vCC).
+  </Accordion>
+
+  <Accordion title="Field access">
+    Instance field instructions (`iget*` / `iput*`) take an object reference register and a field reference operand. Static field instructions (`sget*` / `sput*`) take only a register and a field reference.
+
+    **Instance get** — operand: `FieldReference`
+
+    | Name          | Hex    |
+    |---------------|--------|
+    | `Iget`        | `0x52` |
+    | `IgetWide`    | `0x53` |
+    | `IgetObject`  | `0x54` |
+    | `IgetBoolean` | `0x55` |
+    | `IgetByte`    | `0x56` |
+    | `IgetChar`    | `0x57` |
+    | `IgetShort`   | `0x58` |
+
+    **Instance put** — operand: `FieldReference`
+
+    | Name          | Hex    |
+    |---------------|--------|
+    | `Iput`        | `0x59` |
+    | `IputWide`    | `0x5a` |
+    | `IputObject`  | `0x5b` |
+    | `IputBoolean` | `0x5c` |
+    | `IputByte`    | `0x5d` |
+    | `IputChar`    | `0x5e` |
+    | `IputShort`   | `0x5f` |
+
+    **Static get** — operand: `FieldReference`
+
+    | Name          | Hex    |
+    |---------------|--------|
+    | `Sget`        | `0x60` |
+    | `SgetWide`    | `0x61` |
+    | `SgetObject`  | `0x62` |
+    | `SgetBoolean` | `0x63` |
+    | `SgetByte`    | `0x64` |
+    | `SgetChar`    | `0x65` |
+    | `SgetShort`   | `0x66` |
+
+    **Static put** — operand: `FieldReference`
+
+    | Name          | Hex    |
+    |---------------|--------|
+    | `Sput`        | `0x67` |
+    | `SputWide`    | `0x68` |
+    | `SputObject`  | `0x69` |
+    | `SputBoolean` | `0x6a` |
+    | `SputByte`    | `0x6b` |
+    | `SputChar`    | `0x6c` |
+    | `SputShort`   | `0x6d` |
+  </Accordion>
+
+  <Accordion title="Method invocation">
+    Invoke instructions call a method referenced by a `MethodReference` operand. The standard forms accept up to five explicit registers; the `*Range` forms accept a contiguous range of registers for methods with more arguments.
+
+    **Standard forms** — encoding: \{vD,vE,vF,vG,vA\}, meth@CCCC
+
+    | Name               | Hex    | Dispatch              |
+    |--------------------|--------|-----------------------|
+    | `InvokeVirtual`    | `0x6e` | virtual dispatch       |
+    | `InvokeSuper`      | `0x6f` | super-class dispatch   |
+    | `InvokeDirect`     | `0x70` | direct / constructor   |
+    | `InvokeStatic`     | `0x71` | static method          |
+    | `InvokeInterface`  | `0x72` | interface dispatch     |
+
+    **Range forms** — encoding: \{vCCCC..vNNNN\}, meth@BBBB
+
+    | Name                    | Hex    |
+    |-------------------------|--------|
+    | `InvokeVirtualRange`    | `0x74` |
+    | `InvokeSuperRange`      | `0x75` |
+    | `InvokeDirectRange`     | `0x76` |
+    | `InvokeStaticRange`     | `0x77` |
+    | `InvokeInterfaceRange`  | `0x78` |
+
+    Follow any non-void invocation with a `MoveResult`, `MoveResultWide`, or `MoveResultObject` instruction to capture the return value.
+  </Accordion>
+
+  <Accordion title="Unary operations and type conversions">
+    Unary operations negate or complement a single register. Type conversion instructions widen, narrow, or reinterpret primitive values.
+
+    **Unary arithmetic**
+
+    | Name        | Hex    | Operation            |
+    |-------------|--------|----------------------|
+    | `NegInt`    | `0x7b` | vA = -vB (int)       |
+    | `NotInt`    | `0x7c` | vA = ~vB (int)       |
+    | `NegLong`   | `0x7d` | vA = -vB (long)      |
+    | `NotLong`   | `0x7e` | vA = ~vB (long)      |
+    | `NegFloat`  | `0x7f` | vA = -vB (float)     |
+    | `NegDouble` | `0x80` | vA = -vB (double)    |
+
+    **Type conversions**
+
+    | Name             | Hex    | Conversion          |
+    |------------------|--------|---------------------|
+    | `IntToLong`      | `0x81` | int → long          |
+    | `IntToFloat`     | `0x82` | int → float         |
+    | `IntToDouble`    | `0x83` | int → double        |
+    | `LongToInt`      | `0x84` | long → int          |
+    | `LongToFloat`    | `0x85` | long → float        |
+    | `LongToDouble`   | `0x86` | long → double       |
+    | `FloatToInt`     | `0x87` | float → int         |
+    | `FloatToLong`    | `0x88` | float → long        |
+    | `FloatToDouble`  | `0x89` | float → double      |
+    | `DoubleToInt`    | `0x8a` | double → int        |
+    | `DoubleToLong`   | `0x8b` | double → long       |
+    | `DoubleToFloat`  | `0x8c` | double → float      |
+    | `IntToByte`      | `0x8d` | int → byte (sign-extend) |
+    | `IntToChar`      | `0x8e` | int → char (zero-extend) |
+    | `IntToShort`     | `0x8f` | int → short (sign-extend) |
+
+    All unary and conversion instructions use the `vA, vB` encoding (two 4-bit register fields per 16-bit code unit).
+  </Accordion>
+
+  <Accordion title="Integer arithmetic — three-register forms">
+    These instructions compute `vAA = vBB op vCC` (all 8-bit register fields).
+
+    | Name      | Hex    | Operation       |
+    |-----------|--------|-----------------|
+    | `AddInt`  | `0x90` | vAA = vBB + vCC |
+    | `SubInt`  | `0x91` | vAA = vBB - vCC |
+    | `MulInt`  | `0x92` | vAA = vBB * vCC |
+    | `DivInt`  | `0x93` | vAA = vBB / vCC |
+    | `RemInt`  | `0x94` | vAA = vBB % vCC |
+    | `AndInt`  | `0x95` | vAA = vBB & vCC |
+    | `OrInt`   | `0x96` | vAA = vBB \| vCC |
+    | `XorInt`  | `0x97` | vAA = vBB ^ vCC |
+    | `ShlInt`  | `0x98` | vAA = vBB shl vCC |
+    | `ShrInt`  | `0x99` | vAA = vBB shr vCC (arithmetic) |
+    | `UshrInt` | `0x9a` | vAA = vBB ushr vCC (logical) |
+  </Accordion>
+
+  <Accordion title="Long/float/double arithmetic — three-register forms">
+    These compute `vAA = vBB op vCC` using 64-bit integer, float, or double operands.
+
+    **Long**
+
+    | Name       | Hex    | | Name       | Hex    |
+    |------------|--------|-|------------|--------|
+    | `AddLong`  | `0x9b` | | `AndLong`  | `0xa0` |
+    | `SubLong`  | `0x9c` | | `OrLong`   | `0xa1` |
+    | `MulLong`  | `0x9d` | | `XorLong`  | `0xa2` |
+    | `DivLong`  | `0x9e` | | `ShlLong`  | `0xa3` |
+    | `RemLong`  | `0x9f` | | `ShrLong`  | `0xa4` |
+    |            |        | | `UshrLong` | `0xa5` |
+
+    **Float**
+
+    | Name        | Hex    |
+    |-------------|--------|
+    | `AddFloat`  | `0xa6` |
+    | `SubFloat`  | `0xa7` |
+    | `MulFloat`  | `0xa8` |
+    | `DivFloat`  | `0xa9` |
+    | `RemFloat`  | `0xaa` |
+
+    **Double**
+
+    | Name         | Hex    |
+    |--------------|--------|
+    | `AddDouble`  | `0xab` |
+    | `SubDouble`  | `0xac` |
+    | `MulDouble`  | `0xad` |
+    | `DivDouble`  | `0xae` |
+    | `RemDouble`  | `0xaf` |
+  </Accordion>
+
+  <Accordion title="Arithmetic — 2-address (in-place) forms">
+    The `2Addr` variants compute `vA = vA op vB`, avoiding a separate destination register. The `vA, vB` encoding uses two 4-bit fields.
+
+    **Int 2Addr**
+
+    | Name            | Hex    | | Name            | Hex    |
+    |-----------------|--------|-|-----------------|--------|
+    | `AddInt2Addr`   | `0xb0` | | `ShlInt2Addr`   | `0xb8` |
+    | `SubInt2Addr`   | `0xb1` | | `ShrInt2Addr`   | `0xb9` |
+    | `MulInt2Addr`   | `0xb2` | | `UshrInt2Addr`  | `0xba` |
+    | `DivInt2Addr`   | `0xb3` | | | |
+    | `RemInt2Addr`   | `0xb4` | | | |
+    | `AndInt2Addr`   | `0xb5` | | | |
+    | `OrInt2Addr`    | `0xb6` | | | |
+    | `XorInt2Addr`   | `0xb7` | | | |
+
+    **Long 2Addr**
+
+    | Name             | Hex    | | Name             | Hex    |
+    |------------------|--------|-|------------------|--------|
+    | `AddLong2Addr`   | `0xbb` | | `AndLong2Addr`   | `0xc0` |
+    | `SubLong2Addr`   | `0xbc` | | `OrLong2Addr`    | `0xc1` |
+    | `MulLong2Addr`   | `0xbd` | | `XorLong2Addr`   | `0xc2` |
+    | `DivLong2Addr`   | `0xbe` | | `ShlLong2Addr`   | `0xc3` |
+    | `RemLong2Addr`   | `0xbf` | | `ShrLong2Addr`   | `0xc4` |
+    |                  |        | | `UshrLong2Addr`  | `0xc5` |
+
+    **Float 2Addr**
+
+    | Name              | Hex    |
+    |-------------------|--------|
+    | `AddFloat2Addr`   | `0xc6` |
+    | `SubFloat2Addr`   | `0xc7` |
+    | `MulFloat2Addr`   | `0xc8` |
+    | `DivFloat2Addr`   | `0xc9` |
+    | `RemFloat2Addr`   | `0xca` |
+
+    **Double 2Addr**
+
+    | Name               | Hex    |
+    |--------------------|--------|
+    | `AddDouble2Addr`   | `0xcb` |
+    | `SubDouble2Addr`   | `0xcc` |
+    | `MulDouble2Addr`   | `0xcd` |
+    | `DivDouble2Addr`   | `0xce` |
+    | `RemDouble2Addr`   | `0xcf` |
+  </Accordion>
+
+  <Accordion title="Integer arithmetic — literal forms">
+    Literal variants embed a small integer constant directly in the instruction encoding, avoiding a separate `const` load. The `Operand` must be an `int`.
+
+    **16-bit literal** — encoding: vA, vB, #+CCCC
+
+    | Name            | Hex    | Operation             |
+    |-----------------|--------|-----------------------|
+    | `AddIntLit16`   | `0xd0` | vA = vB + lit16       |
+    | `RsubInt`       | `0xd1` | vA = lit16 - vB (reverse sub) |
+    | `MulIntLit16`   | `0xd2` | vA = vB * lit16       |
+    | `DivIntLit16`   | `0xd3` | vA = vB / lit16       |
+    | `RemIntLit16`   | `0xd4` | vA = vB % lit16       |
+    | `AndIntLit16`   | `0xd5` | vA = vB & lit16       |
+    | `OrIntLit16`    | `0xd6` | vA = vB \| lit16      |
+    | `XorIntLit16`   | `0xd7` | vA = vB ^ lit16       |
+
+    **8-bit literal** — encoding: vAA, vBB, #+CC
+
+    | Name            | Hex    | Operation             |
+    |-----------------|--------|-----------------------|
+    | `AddIntLit8`    | `0xd8` | vAA = vBB + lit8      |
+    | `RsubIntLit8`   | `0xd9` | vAA = lit8 - vBB      |
+    | `MulIntLit8`    | `0xda` | vAA = vBB * lit8      |
+    | `DivIntLit8`    | `0xdb` | vAA = vBB / lit8      |
+    | `RemIntLit8`    | `0xdc` | vAA = vBB % lit8      |
+    | `AndIntLit8`    | `0xdd` | vAA = vBB & lit8      |
+    | `OrIntLit8`     | `0xde` | vAA = vBB \| lit8     |
+    | `XorIntLit8`    | `0xdf` | vAA = vBB ^ lit8      |
+    | `ShlIntLit8`    | `0xe0` | vAA = vBB shl lit8     |
+    | `ShrIntLit8`    | `0xe1` | vAA = vBB shr lit8 (arithmetic) |
+    | `UshrIntLit8`   | `0xe2` | vAA = vBB ushr lit8 (logical) |
+  </Accordion>
+
+  <Accordion title="Compare">
+    Compare instructions write a three-way comparison result (`-1`, `0`, or `1`) into a destination register based on two source registers. `Cmpl` returns `-1` on NaN; `Cmpg` returns `1` on NaN.
+
+    | Name          | Hex    | Type   | NaN result |
+    |---------------|--------|--------|------------|
+    | `CmplFloat`   | `0x2d` | float  | -1         |
+    | `CmpgFloat`   | `0x2e` | float  | +1         |
+    | `CmplDouble`  | `0x2f` | double | -1         |
+    | `CmpgDouble`  | `0x30` | double | +1         |
+    | `CmpLong`     | `0x31` | long   | N/A        |
+
+    All five use the `vAA, vBB, vCC` encoding (8-bit register fields).
+  </Accordion>
+
+  <Accordion title="No-operation">
+    | Name  | Hex    | Notes                                      |
+    |-------|--------|--------------------------------------------|
+    | `Nop` | `0x00` | Does nothing. Also used as a padding byte between instruction blocks. |
+  </Accordion>
+
+</AccordionGroup>
+
+## Usage example
+
+```csharp
+using Dexer.Instructions;
+
+// Load integer literal 42 into v0
+var load = new Instruction(OpCodes.Const16, 42, body.Registers[0]);
+
+// Add v0 + v1, store in v2
+var add = new Instruction(
+    OpCodes.AddInt,
+    null,
+    body.Registers[2],  // destination
+    body.Registers[0],  // source A
+    body.Registers[1]   // source B
+);
+
+// Return the int in v2
+var ret = new Instruction(OpCodes.Return, null, body.Registers[2]);
+
+body.Instructions.Add(load);
+body.Instructions.Add(add);
+body.Instructions.Add(ret);
+```

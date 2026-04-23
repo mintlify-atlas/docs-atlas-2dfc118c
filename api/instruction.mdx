@@ -1,0 +1,138 @@
+---
+title: "Instruction — Dalvik bytecode instruction"
+description: "Reference for the Instruction class, which represents a single Dalvik opcode with its register operands and optional data operand in a method body."
+keywords: ["instruction", "opcode", "register", "operand", "bytecode", "dalvik"]
+---
+
+`Instruction` is the core unit of Dalvik bytecode in Dexer. Each instance represents one instruction in a method's code stream: an `OpCodes` value, zero or more source/destination `Register`s, and an optional `Operand` whose type depends on the opcode. You build a method's logic by constructing `Instruction` objects and adding them to `MethodBody.Instructions`.
+
+## Constructors
+
+<ParamField path="Instruction()" type="constructor">
+  Creates an empty instruction with no opcode, no operand, and an empty register list. Useful when you want to set properties individually.
+</ParamField>
+
+<ParamField path="Instruction(OpCodes opcode, object? operand = null, params Register[]? registers)" type="constructor">
+  Primary constructor. Sets the opcode, optional operand, and zero or more registers in a single call.
+
+  | Parameter   | Type              | Description                                     |
+  |-------------|-------------------|-------------------------------------------------|
+  | `opcode`    | `OpCodes`         | The Dalvik opcode this instruction represents.  |
+  | `operand`   | `object?`         | Optional data operand; see operand types below. |
+  | `registers` | `params Register[]?` | Registers used by this instruction.          |
+</ParamField>
+
+## Properties
+
+<ParamField path="OpCode" type="OpCodes" required>
+  The Dalvik opcode that determines what the instruction does and how Dexer encodes it. See [OpCodes](/api/opcodes) for the full enumeration.
+</ParamField>
+
+<ParamField path="Offset" type="int">
+  Byte offset of this instruction within the method's code section, measured in 16-bit code units. Dexer computes and writes this value automatically during serialization — do not set it manually.
+</ParamField>
+
+<ParamField path="Registers" type="List&lt;Register&gt;" required>
+  The registers this instruction reads from or writes to, in the order required by the Dalvik encoding. For example, `move v0, v1` has `Registers[0]` = v0 (destination) and `Registers[1]` = v1 (source). See [Register](/api/registers).
+</ParamField>
+
+<ParamField path="Operand" type="object?">
+  The instruction's data operand. The runtime type must match what the opcode expects. Passing the wrong type causes an exception during write. The following table lists what each opcode category expects.
+
+  | Operand type             | Used by opcodes                                                                             |
+  |--------------------------|---------------------------------------------------------------------------------------------|
+  | `null`                   | `Nop`, `ReturnVoid`, unary/binary arithmetic ops, and any op that encodes only registers.   |
+  | `int` / `long`           | `Const4`, `Const16`, `Const`, `ConstHigh16`, `ConstWide*`, integer literal ops.            |
+  | `string`                 | `ConstString`, `ConstStringJumbo`                                                           |
+  | `TypeReference`          | `ConstClass`, `CheckCast`, `NewInstance`, `NewArray`, `FilledNewArray*`, `InstanceOf`       |
+  | `MethodReference`        | `InvokeVirtual`, `InvokeSuper`, `InvokeDirect`, `InvokeStatic`, `InvokeInterface`, *Range variants |
+  | `FieldReference`         | `Iget*`, `Iput*`, `Sget*`, `Sput*`                                                         |
+  | `Instruction`            | Branch targets: `Goto`, `Goto16`, `Goto32`, `If*`, `IfEqz` / `IfNez` / etc.               |
+  | `PackedSwitchData`       | `PackedSwitch` — contiguous key ranges with branch targets.                                 |
+  | `SparseSwitchData`       | `SparseSwitch` — sparse key-to-target mapping.                                              |
+  | `Array` (sbyte/short/int/long) | `FillArrayData` — inline array literal.                                              |
+</ParamField>
+
+## Operand types in depth
+
+### Branch targets
+
+For all branch and jump instructions the operand is a reference to another `Instruction` object in the **same** `MethodBody.Instructions` list. Dexer resolves the target to a relative byte offset during write.
+
+```csharp
+// Build a simple if–goto loop
+var body = method.Body;
+var nop  = new Instruction(OpCodes.Nop);
+var jump = new Instruction(OpCodes.Goto); // operand set below
+
+body.Instructions.Add(nop);
+body.Instructions.Add(jump);
+
+// Point the goto back at the nop — creates an infinite loop
+jump.Operand = nop;
+```
+
+### Switch data
+
+`PackedSwitch` requires a `PackedSwitchData` operand that holds a contiguous range of integer keys and a `List<Instruction>` of branch targets, one per key:
+
+```csharp
+var switchData = new PackedSwitchData
+{
+    FirstKey = 0,
+    Targets   = { caseZero, caseOne, caseTwo }
+};
+
+var switchIns = new Instruction(
+    OpCodes.PackedSwitch,
+    switchData,
+    body.Registers[0]   // register holding the switch value
+);
+```
+
+`SparseSwitch` uses a `SparseSwitchData` whose `Targets` is a `SortedDictionary<int, Instruction>`:
+
+```csharp
+var sparseData = new SparseSwitchData();
+sparseData.Targets[10] = case10;
+sparseData.Targets[42] = case42;
+
+var sparseIns = new Instruction(
+    OpCodes.SparseSwitch,
+    sparseData,
+    body.Registers[0]
+);
+```
+
+## Creating and inserting instructions
+
+The example below adds a `const/4 v0, 0` instruction at the beginning of an existing method body:
+
+```csharp
+using Dexer.Instructions;
+
+MethodBody body = method.Body;
+
+// Use a register already in the pre-allocated pool
+Register v0 = body.Registers[0];
+
+// const/4 v0, 0 — load the integer literal 0 into v0
+var ins = new Instruction(OpCodes.Const4, 0, v0);
+
+body.Instructions.Insert(0, ins);
+```
+
+To append a return statement:
+
+```csharp
+// return-void
+body.Instructions.Add(new Instruction(OpCodes.ReturnVoid));
+```
+
+<Note>
+  Registers passed to an `Instruction` must come from the owning `MethodBody.Registers` pool. Creating a `Register` with an index that is out of range for the pool will produce a malformed DEX file.
+</Note>
+
+## `Equals` and identity
+
+Two `Instruction` instances are considered equal when their `Offset` values are the same. Dexer uses this for deduplication inside `ExceptionHandler` catch sets, and it only works correctly after offsets have been computed during write. Do not rely on `Equals` for instructions that have not yet been serialized.

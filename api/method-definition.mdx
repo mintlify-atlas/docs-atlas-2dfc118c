@@ -1,0 +1,146 @@
+---
+title: 'MethodDefinition — decoded method in a DEX class'
+description: 'MethodDefinition extends MethodReference with access flags, annotations, an optional body, and boolean shortcut properties for every Dalvik access modifier.'
+keywords: ['method definition', 'dex', 'dalvik', 'access flags', 'method body', 'annotations']
+---
+
+`MethodDefinition` represents a method that is fully defined within a DEX file. It extends `MethodReference` — which captures the owning class, name, and prototype — and also implements `IMemberDefinition`, adding `AccessFlags`, a strongly-typed `Owner`, and an `Annotations` list.
+
+A method's executable bytecode is exposed through the `Body` property. When a method is `abstract` or `native`, `Body` is `null`. The `IsVirtual` flag indicates whether the method is dispatched through the virtual method table rather than the direct method table; this distinction is internal to the DEX format and does not directly correspond to the Java `virtual` keyword.
+
+## Inheritance
+
+```
+IMemberReference
+  └── MethodReference  (provides Owner, Name, Prototype)
+        └── MethodDefinition  (implements IMemberDefinition)
+```
+
+## Properties
+
+<ParamField path="Name" type="string" required>
+  The simple (unqualified) method name. Inherited from `MethodReference`. For constructors this is `"<init>"` and for static initializers it is `"<clinit>"`.
+</ParamField>
+
+<ParamField path="Prototype" type="Prototype" required>
+  The method signature, describing the return type and parameter types. Inherited from `MethodReference`. See the [Prototype reference](/api/prototype) for details.
+</ParamField>
+
+<ParamField path="Owner" type="ClassDefinition" required>
+  The class that declares this method. Overrides `MethodReference.Owner` with the narrower `ClassDefinition` type so no cast is needed when accessing class-specific members.
+</ParamField>
+
+<ParamField path="AccessFlags" type="AccessFlags" required>
+  Bitfield encoding visibility and behavioural modifiers. Use the boolean shortcut properties for idiomatic access.
+</ParamField>
+
+<ParamField path="Annotations" type="List<Annotation>" required>
+  Method-level annotations attached to this definition. Parameter annotations are stored on the individual `Parameter` objects inside `Prototype.Parameters`.
+</ParamField>
+
+<ParamField path="Body" type="MethodBody?">
+  The decoded instruction stream and associated metadata (registers, try/catch blocks, debug info). `null` for abstract and native methods.
+</ParamField>
+
+<ParamField path="IsVirtual" type="bool">
+  `true` when the DEX file places this method in the virtual methods section (instance methods that can be overridden), `false` when it appears in the direct methods section (static, private, or constructor methods).
+</ParamField>
+
+## Access flag properties
+
+Each property tests or sets a single bit within `AccessFlags`. Setting a property to `true` ORs the flag in; to clear a flag, assign directly to `AccessFlags`.
+
+<AccordionGroup>
+  <Accordion title="Visibility flags">
+
+| Property | Flag | Value |
+|---|---|---|
+| `IsPublic` | `AccessFlags.Public` | `0x1` |
+| `IsPrivate` | `AccessFlags.Private` | `0x2` |
+| `IsProtected` | `AccessFlags.Protected` | `0x4` |
+
+  </Accordion>
+
+  <Accordion title="Modifier flags">
+
+| Property | Flag | Value |
+|---|---|---|
+| `IsStatic` | `AccessFlags.Static` | `0x8` |
+| `IsFinal` | `AccessFlags.Final` | `0x10` |
+| `IsAbstract` | `AccessFlags.Abstract` | `0x400` |
+| `IsSynthetic` | `AccessFlags.Synthetic` | `0x1000` |
+| `IsStrictFp` | `AccessFlags.StrictFp` | `0x800` |
+
+  </Accordion>
+
+  <Accordion title="Concurrency flags">
+
+| Property | Flag | Value |
+|---|---|---|
+| `IsSynchronized` | `AccessFlags.Synchronized` | `0x20` |
+| `IsDeclaredSynchronized` | `AccessFlags.DeclaredSynchronized` | `0x20000` |
+
+  </Accordion>
+
+  <Accordion title="Special method flags">
+
+| Property | Flag | Value |
+|---|---|---|
+| `IsNative` | `AccessFlags.Native` | `0x100` |
+| `IsBridge` | `AccessFlags.Bridge` | `0x40` |
+| `IsVarArgs` | `AccessFlags.VarArgs` | `0x80` |
+| `IsConstructor` | `AccessFlags.Constructor` | `0x10000` |
+
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+`AccessFlags.Bridge` and `AccessFlags.Volatile` share the value `0x40`, and `AccessFlags.VarArgs` and `AccessFlags.Transient` share `0x80`. The correct semantic is determined by context: these flags apply to methods and fields respectively.
+</Note>
+
+## Example: inspecting methods on a class
+
+```csharp
+Dex dex = Dex.Read("classes.dex");
+ClassDefinition? cls = dex.GetClass("com.example.MainActivity");
+
+if (cls is null)
+    return;
+
+foreach (MethodDefinition method in cls.Methods)
+{
+    Console.WriteLine($"{method.Name}{method.Prototype}");
+    Console.WriteLine($"  Public:      {method.IsPublic}");
+    Console.WriteLine($"  Static:      {method.IsStatic}");
+    Console.WriteLine($"  Constructor: {method.IsConstructor}");
+    Console.WriteLine($"  Has body:    {method.Body is not null}");
+    Console.WriteLine($"  Annotations: {method.Annotations.Count}");
+    Console.WriteLine();
+}
+```
+
+## Example: finding abstract methods
+
+```csharp
+Dex dex = Dex.Read("classes.dex");
+
+var abstractMethods = dex.Classes
+    .SelectMany(c => c.Methods)
+    .Where(m => m.IsAbstract)
+    .ToList();
+
+foreach (MethodDefinition m in abstractMethods)
+    Console.WriteLine($"{m.Owner.Fullname}::{m.Name}");
+```
+
+## Example: reading method annotations
+
+```csharp
+MethodDefinition? method = cls.GetMethod("onResume");
+
+if (method is not null)
+{
+    foreach (Annotation ann in method.Annotations)
+        Console.WriteLine($"  @{ann.Type.Fullname}");
+}
+```

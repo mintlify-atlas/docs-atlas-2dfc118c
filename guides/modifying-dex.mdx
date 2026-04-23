@@ -1,0 +1,174 @@
+---
+title: "Modifying Classes, Methods, and Instructions"
+description: "Patch opcodes and operands in place, insert new instructions, and import external method references to add new behavior to an existing DEX."
+---
+
+Dexer follows a straightforward read–modify–write pattern: load the DEX into memory, mutate the object graph, then write it back out. Because every instruction is a first-class object, patching an opcode is as simple as assigning to a property, and inserting new bytecode is a standard `List<T>` operation.
+
+## The read–modify–write pattern
+
+```csharp
+using Dexer.Core;
+using Dexer.Instructions;
+
+// 1. Load
+Dex dex = Dex.Read("classes.dex");
+
+// 2. Modify (see sections below)
+MethodDefinition method = dex.GetClass("dexer.poc.MainActivity")!
+                             .GetMethod("onCreate")!;
+
+method.Body!.Instructions[5].OpCode  = OpCodes.AddInt;
+method.Body!.Instructions[7].Operand = "Dexer rocks! ";
+
+// 3. Write
+dex.Write("output.dex");
+```
+
+## Modifying opcodes
+
+Every `Instruction` exposes an `OpCode` property of type `OpCodes`. Assigning a new value replaces the operation while keeping the existing registers and operand intact — useful when the surrounding instruction format is compatible.
+
+```csharp
+// Change multiplication to addition
+method.Body!.Instructions[5].OpCode = OpCodes.AddInt;
+```
+
+<Warning>
+Not all opcode substitutions are safe. If the new opcode uses a different instruction format (e.g. a different number of registers or a different operand type), the writer will reject the instruction at serialization time. Check the Dalvik instruction reference when crossing format boundaries.
+</Warning>
+
+## Modifying operands
+
+The `Instruction.Operand` property is typed as `object?`, accommodating constants, string literals, type references, field references, method references, branch targets, and switch data. Assign the appropriate value directly.
+
+```csharp
+// Replace a string constant
+method.Body!.Instructions[7].Operand = "Dexer rocks! ";
+
+// Replace an integer constant
+method.Body!.Instructions[3].Operand = 42;
+```
+
+<Tip>
+Branch targets are represented as `Instruction` objects — assign the target `Instruction` instance, not a raw offset. Dexer recomputes byte offsets automatically when writing.
+</Tip>
+
+## Adding new instructions
+
+`MethodBody.Instructions` is a plain `List<Instruction>`. Use any `List<T>` method to insert, append, or remove instructions.
+
+```csharp
+var regs = method.Body!.Registers;
+
+// Load a color constant into register 1
+Instruction iconst = new Instruction(OpCodes.Const, unchecked((int)0xFFFF00FF), regs[1]);
+method.Body.Instructions.Insert(14, iconst);
+
+// Invoke a method using registers 5 (this) and 1 (color)
+Instruction iinvoke = new Instruction(OpCodes.InvokeVirtual, setTitleColor, regs[5], regs[1]);
+method.Body.Instructions.Insert(15, iinvoke);
+```
+
+The `Instruction` constructor signature is:
+
+```csharp
+public Instruction(OpCodes opcode, object? operand = null, params Register[]? registers)
+```
+
+Pass `null` for `operand` when the opcode does not use one, and list the participating registers as trailing arguments.
+
+## Importing new method references
+
+Before an instruction can reference a method that did not already exist in the DEX, register it with `dex.Import`. If an equivalent `MethodReference` is already in the pool, `Import` returns the existing entry; otherwise it adds and returns the new one.
+
+<Steps>
+  <Step title="Define a Prototype">
+    `Prototype` describes the return type and parameter types of the method signature.
+
+    ```csharp
+    using Dexer.Core;
+
+    // void setTitleColor(int color)
+    Prototype prototype = new Prototype(
+        PrimitiveType.Void,
+        new Parameter(PrimitiveType.Int)
+    );
+    ```
+
+    `PrimitiveType` provides static singletons for every JVM primitive: `Void`, `Boolean`, `Byte`, `Short`, `Char`, `Int`, `Long`, `Float`, and `Double`.
+  </Step>
+
+  <Step title="Build a MethodReference">
+    Provide the owning class, the method name, and the prototype.
+
+    ```csharp
+    MethodReference setTitleColor = new MethodReference(
+        method.Owner,       // ClassReference — the declaring class
+        "setTitleColor",    // method name
+        prototype
+    );
+    ```
+  </Step>
+
+  <Step title="Import into the DEX">
+    Call `dex.Import` to register the reference and obtain the canonical instance to use as an `Instruction.Operand`.
+
+    ```csharp
+    MethodReference imported = dex.Import(setTitleColor);
+    ```
+  </Step>
+</Steps>
+
+## Full example from the README
+
+The example below reproduces the complete workflow from the README: it changes an arithmetic opcode, replaces a string constant, declares a new method reference, and inserts two instructions to invoke it.
+
+```csharp
+using System;
+using Dexer.Core;
+using Dexer.Instructions;
+
+Dex dex = Dex.Read("classes.dex");
+MethodDefinition method = dex.GetClass("dexer.poc.MainActivity")!
+                             .GetMethod("onCreate")!;
+
+// Patch opcode: multiply → add
+method.Body!.Instructions[5].OpCode = OpCodes.AddInt;
+
+// Patch string operand
+method.Body!.Instructions[7].Operand = "Dexer rocks! ";
+
+// Prepare color value
+int color;
+unchecked { color = (int)0xFFFF00FF; }
+
+// Declare and import a new method reference
+Prototype prototype = new Prototype(PrimitiveType.Void,
+                                    new Parameter(PrimitiveType.Int));
+
+MethodReference setTitleColor = dex.Import(
+    new MethodReference(method.Owner, "setTitleColor", prototype)
+);
+
+// Insert instructions at positions 14 and 15
+var regs = method.Body.Registers;
+
+Instruction iconst  = new Instruction(OpCodes.Const, color, regs[1]);
+Instruction iinvoke = new Instruction(OpCodes.InvokeVirtual, setTitleColor,
+                                      regs[5], regs[1]);
+
+method.Body.Instructions.Insert(14, iconst);
+method.Body.Instructions.Insert(15, iinvoke);
+
+dex.Write("output.dex");
+```
+
+<CardGroup cols={2}>
+  <Card title="Working with Instructions" icon="microchip" href="/guides/working-with-instructions">
+    Deep-dive into the Instruction model, register access, and opcode categories.
+  </Card>
+  <Card title="Writing DEX Files" icon="floppy-disk" href="/guides/writing-dex">
+    Persist your changes back to a file or stream.
+  </Card>
+</CardGroup>

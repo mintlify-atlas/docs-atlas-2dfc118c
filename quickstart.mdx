@@ -1,80 +1,201 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Quickstart: modify a DEX file in 5 minutes"
+description: "Install Dexer from NuGet, load a DEX file, navigate to a class and method, patch bytecode instructions, and write the result back to disk in minutes."
+keywords: ["dexer", "quickstart", "dex", "android", "bytecode", "patch", "nuget"]
 ---
 
-## Get started in three steps
+This guide walks you through the complete Dexer workflow: install the package, load a `.DEX` file, find a class and method, change an opcode and a string constant, then save the patched file. You will have working code in about five minutes.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  You need a `.DEX` file to follow along. If you do not have one, extract `classes.dex` from any Android APK by renaming the `.apk` to `.zip` and unpacking it.
+</Note>
 
-### Step 1: Set up your local environment
+<Steps>
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Step title="Install the Dexer package">
 
-### Step 2: Deploy your changes
+Add Dexer to your .NET project using the dotnet CLI or by adding a `PackageReference` directly to your project file.
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+<CodeGroup>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+```bash dotnet CLI
+dotnet add package Dexer
+```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+```xml PackageReference
+<PackageReference Include="Dexer" Version="1.0.0" />
+```
 
-### Step 3: Go live
+</CodeGroup>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+Dexer targets .NET Standard 2.0 and works with .NET 6+, .NET Framework 4.6.1+, and any compatible runtime.
+
+</Step>
+
+<Step title="Add using directives">
+
+At the top of your source file, import the three namespaces you will use most often.
+
+```csharp
+using Dexer.Core;
+using Dexer.Instructions;
+```
+
+`Dexer.Core` contains `Dex`, `ClassDefinition`, `MethodDefinition`, `Prototype`, and related types. `Dexer.Instructions` contains `Instruction`, `OpCodes`, and `Register`.
+
+</Step>
+
+<Step title="Load a DEX file">
+
+Call `Dex.Read` with a file path. This parses the entire DEX binary into an in-memory object model.
+
+```csharp
+Dex dex = Dex.Read("classes.dex");
+```
+
+You can also read from a `Stream` if you are working with files inside an APK or a custom source:
+
+```csharp
+using Stream stream = File.OpenRead("classes.dex");
+Dex dex = Dex.Read(stream);
+```
+
+</Step>
+
+<Step title="Navigate to a class and method">
+
+Use `GetClass` on the `Dex` object to look up a class by its fully-qualified name, then call `GetMethod` on the returned `ClassDefinition`.
+
+```csharp
+ClassDefinition cls = dex.GetClass("dexer.poc.MainActivity");
+MethodDefinition method = cls.GetMethod("onCreate");
+```
+
+<Tip>
+  `GetClass` searches inner classes recursively. `GetMethod` returns the first match by name. Use `GetMethods` (plural) to retrieve all overloads when a class has multiple methods with the same name.
+</Tip>
+
+Both methods return `null` if there is no match, so check for `null` when working with unknown DEX files:
+
+```csharp
+ClassDefinition? cls = dex.GetClass("dexer.poc.MainActivity");
+MethodDefinition? method = cls?.GetMethod("onCreate");
+```
+
+</Step>
+
+<Step title="Inspect and modify instructions">
+
+Each `MethodDefinition` with a body exposes `method.Body.Instructions`, a list of `Instruction` objects. Each `Instruction` has an `OpCode` property and an `Operand` property.
+
+The example below replicates the canonical Dexer demo: it changes a multiply opcode to add, and replaces a string constant.
+
+```csharp
+// Change the arithmetic opcode at index 5 from multiply to add
+method.Body.Instructions[5].OpCode = OpCodes.AddInt;
+
+// Replace the string constant at index 7
+method.Body.Instructions[7].Operand = "Dexer rocks! ";
+```
+
+You can also create and insert entirely new instructions. The `Instruction` constructor accepts an `OpCodes` value, an optional operand, and a `params` array of registers:
+
+```csharp
+// Load an integer constant into register 1
+var registers = method.Body.Registers;
+Instruction iconst = new Instruction(OpCodes.Const, unchecked((int)0xFFFF00FF), registers[1]);
+method.Body.Instructions.Insert(14, iconst);
+
+// Invoke a method with 'this' in register 5 and the color in register 1
+Prototype prototype = new Prototype(PrimitiveType.Void, new Parameter(PrimitiveType.Int));
+MethodReference setTitleColor = dex.Import(
+    new MethodReference(method.Owner, "setTitleColor", prototype));
+
+Instruction iinvoke = new Instruction(OpCodes.InvokeVirtual, setTitleColor, registers[5], registers[1]);
+method.Body.Instructions.Insert(15, iinvoke);
+```
+
+<Warning>
+  Instruction indices are position-based. After inserting instructions, all subsequent indices shift. Insert from the end of the method body backwards, or track instructions by reference rather than index, to avoid off-by-one errors.
+</Warning>
+
+</Step>
+
+<Step title="Write the patched DEX file">
+
+Call `Write` with an output file path. Dexer recalculates the file header, string pool, and checksums automatically.
+
+```csharp
+dex.Write("output.dex");
+```
+
+You can also write to a `Stream`:
+
+```csharp
+using Stream output = File.Create("output.dex");
+dex.Write(output);
+```
+
+</Step>
+
+</Steps>
+
+## Complete example
+
+Here is the full program from the steps above, matching the canonical Dexer README example:
+
+```csharp
+using Dexer.Core;
+using Dexer.Instructions;
+
+Dex dex = Dex.Read("classes.dex");
+MethodDefinition method = dex.GetClass("dexer.poc.MainActivity").GetMethod("onCreate");
+
+// Patch opcode: change multiply to add
+method.Body.Instructions[5].OpCode = OpCodes.AddInt;
+
+// Patch string constant
+method.Body.Instructions[7].Operand = "Dexer rocks! ";
+
+dex.Write("output.dex");
+```
+
+## Rebuild and reinstall the APK
+
+After writing the patched DEX, you can rebuild and reinstall the APK using [apktool](https://apktool.org/) and the Android SDK tools:
+
+```bash
+# Unpack the APK (keep raw classes.dex)
+apktool d -s -f MyApp.apk output/
+
+# Copy your patched DEX into place
+cp output.dex output/classes.dex
+
+# Rebuild the APK
+apktool b output/ MyApp.patched.apk
+
+# Sign with the debug key
+jarsigner -keystore ~/.android/debug.keystore \
+          -storepass android -keypass android \
+          MyApp.patched.apk androiddebugkey
+
+# Install on a connected device
+adb install MyApp.patched.apk
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Installation" icon="package" href="/installation">
+    Full installation options, runtime requirements, and project configuration.
+  </Card>
+  <Card title="Working with instructions" icon="microchip" href="/guides/working-with-instructions">
+    Deep dive into opcodes, registers, operand types, and control flow.
+  </Card>
+  <Card title="Reading DEX files" icon="file-import" href="/guides/reading-dex">
+    Iterate classes, methods, fields, and annotations from a DEX file.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/dex">
+    Complete reference for `Dex`, `ClassDefinition`, `MethodDefinition`, and more.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

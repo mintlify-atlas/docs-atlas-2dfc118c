@@ -1,0 +1,230 @@
+---
+title: "Working with Dalvik Instructions and Registers"
+description: "Explore the Instruction and MethodBody model — registers, operand types, opcode categories, switch tables, and debug line-number mappings."
+---
+
+Every non-abstract, non-native method in a DEX file has a `MethodBody` that holds a flat list of `Instruction` objects, a register file, and optional debug information. Dexer exposes all of this as a straightforward .NET object graph, making it easy to read, iterate, and rewrite bytecode without dealing with raw binary formats.
+
+## MethodBody overview
+
+`MethodDefinition.Body` is `null` for abstract and native methods. For concrete methods it is a `MethodBody` with the following key properties:
+
+| Property | Type | Description |
+|---|---|---|
+| `Instructions` | `List<Instruction>` | The ordered instruction stream |
+| `Registers` | `List<Register>` | The method's virtual register file |
+| `Exceptions` | `List<ExceptionHandler>` | Try/catch blocks covering instructions |
+| `IncomingArguments` | `ushort` | Number of argument words passed into the method |
+| `OutgoingArguments` | `ushort` | Maximum argument words passed to any invoked method |
+| `DebugInfo` | `DebugInfo?` | Line numbers and local-variable names |
+
+## The Instruction type
+
+Each `Instruction` has four properties:
+
+```csharp
+public OpCodes        OpCode    { get; set; }
+public int            Offset    { get; set; }   // read-only after parsing; recomputed on write
+public List<Register> Registers { get; set; }
+public object?        Operand   { get; set; }
+```
+
+### Reading a specific instruction
+
+```csharp
+using Dexer.Core;
+using Dexer.Instructions;
+
+Dex dex = Dex.Read("classes.dex");
+MethodDefinition method = dex.GetClass("dexer.poc.MainActivity")!
+                             .GetMethod("onCreate")!;
+
+Instruction ins = method.Body!.Instructions[5];
+Console.WriteLine($"Offset : {ins.Offset}");
+Console.WriteLine($"OpCode : {ins.OpCode}");
+Console.WriteLine($"Operand: {ins.Operand}");
+```
+
+### Iterating all instructions
+
+```csharp
+foreach (Instruction ins in method.Body!.Instructions)
+{
+    Console.WriteLine($"[{ins.Offset:X4}] {ins.OpCode,-24} {ins.Operand}");
+}
+```
+
+### Creating a new instruction
+
+The primary constructor accepts an opcode, an optional operand, and zero or more register arguments:
+
+```csharp
+public Instruction(OpCodes opcode, object? operand = null, params Register[]? registers)
+```
+
+```csharp
+var regs = method.Body!.Registers;
+
+// No operand, two registers
+Instruction move = new Instruction(OpCodes.Move, null, regs[0], regs[1]);
+
+// Integer constant into register 1
+Instruction konst = new Instruction(OpCodes.Const, 42, regs[1]);
+
+// String constant into register 0
+Instruction str = new Instruction(OpCodes.ConstString, "hello", regs[0]);
+
+// Virtual method call with 'this' and one argument
+Instruction invoke = new Instruction(OpCodes.InvokeVirtual, methodRef, regs[5], regs[1]);
+```
+
+A parameterless constructor is also available when you need to set properties individually:
+
+```csharp
+var ins = new Instruction { OpCode = OpCodes.ReturnVoid };
+```
+
+## Registers
+
+Dalvik uses a fixed-size register window per method frame. `MethodBody.Registers` is a `List<Register>` where each entry wraps a zero-based `Index`.
+
+```csharp
+List<Register> regs = method.Body!.Registers;
+
+// Access register 0 (often holds 'this' for instance methods near the end of the window)
+Register r0 = regs[0];
+Console.WriteLine(r0.Index);   // 0
+
+// Use a register in a new instruction
+Instruction ins = new Instruction(OpCodes.Move, null, regs[2], regs[3]);
+```
+
+<Note>
+In Dalvik calling conventions, method arguments occupy the *last* N registers of the frame. For an instance method with two arguments, `this` is in the second-to-last register and the argument follows it. The exact layout depends on the method's register count and argument count.
+</Note>
+
+## OpCodes categories
+
+The `OpCodes` enum maps directly to the Dalvik instruction set. The table below groups opcodes by functional category.
+
+<Accordion title="Move and result opcodes">
+Move values between registers or capture the result of the previous invoke.
+
+| OpCode | Description |
+|---|---|
+| `Move`, `MoveFrom16`, `Move16` | Copy int/reference between registers |
+| `MoveWide`, `MoveWideFrom16`, `MoveWide16` | Copy wide (64-bit) value |
+| `MoveObject`, `MoveObjectFrom16`, `MoveObject16` | Copy object reference |
+| `MoveResult` | Capture `int` result of previous invoke |
+| `MoveResultWide` | Capture `long`/`double` result |
+| `MoveResultObject` | Capture object result |
+| `MoveException` | Capture thrown exception in a catch handler |
+</Accordion>
+
+<Accordion title="Constant-load opcodes">
+Load immediate values into registers.
+
+| OpCode | Description |
+|---|---|
+| `Const4`, `Const16`, `Const`, `ConstHigh16` | Load 32-bit literal |
+| `ConstWide16`, `ConstWide32`, `ConstWide`, `ConstWideHigh16` | Load 64-bit literal |
+| `ConstString`, `ConstStringJumbo` | Load string reference |
+| `ConstClass` | Load class reference |
+</Accordion>
+
+<Accordion title="Arithmetic and conversion opcodes">
+Arithmetic operations on int, long, float, and double values. The `2Addr` suffix operates in-place on the destination register. `Lit8` / `Lit16` variants take a literal second operand.
+
+Examples: `AddInt`, `SubInt`, `MulInt`, `DivInt`, `RemInt`, `AndInt`, `OrInt`, `XorInt`, `ShlInt`, `ShrInt`, `UshrInt`, `AddLong`, `MulFloat`, `DivDouble`, `NegInt`, `NotLong`, `IntToFloat`, `DoubleToInt`, `AddInt2Addr`, `MulIntLit8`, `AddIntLit16`.
+</Accordion>
+
+<Accordion title="Control flow opcodes">
+Branching, returns, and switches.
+
+| OpCode | Description |
+|---|---|
+| `Goto`, `Goto16`, `Goto32` | Unconditional branch |
+| `IfEq`, `IfNe`, `IfLt`, `IfGe`, `IfGt`, `IfLe` | Two-register conditional branch |
+| `IfEqz`, `IfNez`, `IfLtz`, `IfGez`, `IfGtz`, `IfLez` | Zero-comparison conditional branch |
+| `PackedSwitch` | Dense integer switch |
+| `SparseSwitch` | Sparse key–target switch |
+| `Return`, `ReturnWide`, `ReturnObject`, `ReturnVoid` | Method return |
+| `Throw` | Throw an exception |
+</Accordion>
+
+<Accordion title="Invoke opcodes">
+Call methods. The operand is a `MethodReference`; registers list the arguments.
+
+| OpCode | Description |
+|---|---|
+| `InvokeVirtual` | Virtual dispatch |
+| `InvokeSuper` | Super-class dispatch |
+| `InvokeDirect` | Direct (constructor / private) |
+| `InvokeStatic` | Static method |
+| `InvokeInterface` | Interface dispatch |
+| `InvokeVirtualRange` … `InvokeInterfaceRange` | Range variants for more than 5 arguments |
+</Accordion>
+
+<Accordion title="Field access opcodes">
+Read and write instance fields (`Iget` / `Iput`) and static fields (`Sget` / `Sput`). Each has typed variants: `Wide`, `Object`, `Boolean`, `Byte`, `Char`, `Short`.
+</Accordion>
+
+<Accordion title="Array opcodes">
+| OpCode | Description |
+|---|---|
+| `NewArray` | Allocate a new array |
+| `FilledNewArray`, `FilledNewArrayRange` | Allocate and fill in one step |
+| `FillArrayData` | Fill an existing array from a packed data payload |
+| `ArrayLength` | Get array length |
+| `Aget` / `Aput` (and typed variants) | Element read/write |
+</Accordion>
+
+## Packed switch and sparse switch data
+
+`PackedSwitch` and `SparseSwitch` instructions carry their jump tables as structured operands rather than raw integers.
+
+```csharp
+// PackedSwitchData — consecutive integer keys starting at firstKey
+// Operand is a PackedSwitchData; its Targets list maps to branch instructions
+Instruction ps = method.Body!.Instructions
+    .First(i => i.OpCode == OpCodes.PackedSwitch);
+
+// SparseSwitchData — arbitrary key→instruction pairs
+Instruction ss = method.Body!.Instructions
+    .First(i => i.OpCode == OpCodes.SparseSwitch);
+```
+
+<Note>
+The `MethodBody` writer validates that switch operands are the correct data type (`PackedSwitchData` or `SparseSwitchData`) and throws `InstructionException` if they are not.
+</Note>
+
+## Debug information and line numbers
+
+When the DEX was compiled with debug symbols, `MethodBody.DebugInfo` is non-null.
+
+```csharp
+DebugInfo? dbg = method.Body!.DebugInfo;
+
+if (dbg is not null)
+{
+    Console.WriteLine($"First line: {dbg.LineStart}");
+
+    // Parameter names (null entries are unnamed parameters)
+    for (int i = 0; i < dbg.Parameters.Count; i++)
+        Console.WriteLine($"  Param {i}: {dbg.Parameters[i] ?? "<unnamed>"}");
+
+    // Raw debug instruction stream (line advances, local variable events, etc.)
+    Console.WriteLine($"  Debug instructions: {dbg.DebugInstructions.Count}");
+}
+```
+
+`DebugInfo.LineStart` holds the source line of the first real instruction. The `DebugInstructions` list encodes line-number advances and local-variable scope events in the compact Dalvik debug format; Dexer preserves these verbatim on round-trip.
+
+<CardGroup cols={2}>
+  <Card title="Modifying DEX Files" icon="pen-to-square" href="/guides/modifying-dex">
+    Patch opcodes, operands, and insert new instructions.
+  </Card>
+  <Card title="Exception Handling" icon="shield-exclamation" href="/guides/exception-handling">
+    Read and interpret try/catch blocks encoded in MethodBody.Exceptions.
+  </Card>
+</CardGroup>

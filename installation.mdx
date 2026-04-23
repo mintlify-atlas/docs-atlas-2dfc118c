@@ -1,0 +1,169 @@
+---
+title: "Installing Dexer in your .NET project"
+description: "System requirements, NuGet installation methods, PackageReference configuration, and the namespaces to import before writing your first Dexer code."
+keywords: ["dexer", "install", "nuget", "dotnet", "net standard", "package reference"]
+---
+
+Dexer is distributed as a NuGet package and has no runtime dependencies beyond the .NET Standard 2.0 base class library. This page covers every supported installation method, the compatible runtimes, and the namespace imports you need in your source files.
+
+## System requirements
+
+Dexer targets **[.NET Standard 2.0](https://learn.microsoft.com/en-us/dotnet/standard/net-standard)**. Any runtime that implements this standard can consume the library.
+
+| Runtime | Minimum version |
+|---------|----------------|
+| .NET | 6.0 |
+| .NET Framework | 4.6.1 |
+| .NET Core | 2.0 |
+| Mono | 5.4 |
+| Xamarin.iOS | 10.14 |
+| Xamarin.Android | 8.0 |
+| Unity | 2018.1 |
+
+<Note>
+  No additional packages or native libraries are required. Dexer is a pure managed library.
+</Note>
+
+## Installation
+
+Choose the method that fits your workflow.
+
+<Tabs>
+
+<Tab title="dotnet CLI">
+
+Run the following command in the directory that contains your `.csproj` file:
+
+```bash
+dotnet add package Dexer
+```
+
+This adds the latest stable version of Dexer to your project and restores packages automatically.
+
+To pin a specific version:
+
+```bash
+dotnet add package Dexer --version 1.0.0
+```
+
+</Tab>
+
+<Tab title="PackageReference (XML)">
+
+Add the following element inside the `<ItemGroup>` section of your `.csproj` file, then run `dotnet restore`:
+
+```xml
+<ItemGroup>
+  <PackageReference Include="Dexer" Version="1.0.0" />
+</ItemGroup>
+```
+
+Use a version range if you want to receive patch updates automatically:
+
+```xml
+<PackageReference Include="Dexer" Version="1.0.*" />
+```
+
+</Tab>
+
+<Tab title="NuGet Package Manager (Visual Studio)">
+
+1. Right-click your project in **Solution Explorer** and select **Manage NuGet Packages**.
+2. Select the **Browse** tab and search for `Dexer`.
+3. Select the package by **Sebastien Lebreton** and click **Install**.
+
+</Tab>
+
+<Tab title="Package Manager Console">
+
+In the Visual Studio **Package Manager Console**, run:
+
+```powershell
+Install-Package Dexer
+```
+
+</Tab>
+
+</Tabs>
+
+## Namespace imports
+
+Dexer's public API is split across three namespaces. Import the ones you need at the top of each source file.
+
+```csharp
+using Dexer.Core;         // Dex, ClassDefinition, MethodDefinition, FieldDefinition,
+                          // Prototype, Parameter, PrimitiveType, MethodReference, etc.
+using Dexer.Instructions; // Instruction, OpCodes, Register, MethodBody
+using Dexer.IO;           // Rarely needed directly; DexReader and DexWriter are internal
+```
+
+For most tasks you only need `Dexer.Core` and `Dexer.Instructions`. Import `Dexer.IO` only if you are working directly with streams at a low level and need access to reader/writer types (these are primarily internal).
+
+## Verify the installation
+
+Create a minimal program that loads a DEX file and prints the name of every top-level class. If this compiles and runs, Dexer is installed correctly.
+
+```csharp
+using Dexer.Core;
+
+Dex dex = Dex.Read("classes.dex");
+
+foreach (ClassDefinition cls in dex.Classes)
+{
+    Console.WriteLine(cls.Fullname);
+}
+```
+
+Run the program against a DEX file extracted from any APK:
+
+```bash
+dotnet run
+```
+
+You should see output similar to:
+
+```
+com.example.MainActivity
+com.example.BuildConfig
+com.example.R
+```
+
+<Tip>
+  To quickly obtain a `.DEX` file for testing, rename any `.apk` to `.zip`, extract it, and locate `classes.dex` inside.
+</Tip>
+
+## Project configuration example
+
+A minimal `.csproj` targeting .NET 8 with Dexer installed looks like this:
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dexer" Version="1.0.0" />
+  </ItemGroup>
+
+</Project>
+```
+
+<Note>
+  Dexer ships with a `.snupkg` symbols package and SourceLink support, so you can step through Dexer source code in the Visual Studio or Rider debugger without any additional configuration.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Write your first DEX patching program in five minutes.
+  </Card>
+  <Card title="Reading DEX files" icon="file-import" href="/guides/reading-dex">
+    Load a DEX file and navigate its class and method structure.
+  </Card>
+</CardGroup>

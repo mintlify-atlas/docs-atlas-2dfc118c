@@ -1,0 +1,141 @@
+---
+title: "Loading and Traversing DEX Files"
+description: "Learn how to open a DEX file from disk or a stream, navigate the class list, look up specific types, and iterate methods and fields."
+---
+
+Opening a DEX file with Dexer is a single method call. The `Dex` class exposes static `Read` overloads that parse a Dalvik Executable from either a file path or an arbitrary `Stream`, returning a fully populated object graph you can query and modify in memory.
+
+## Loading a DEX file
+
+<Steps>
+  <Step title="Read from a file path">
+    Pass the file path directly to `Dex.Read`. Dexer opens the file, reads the binary format, and returns a `Dex` instance.
+
+    ```csharp
+    using Dexer.Core;
+
+    Dex dex = Dex.Read("classes.dex");
+    ```
+  </Step>
+
+  <Step title="Read from a Stream">
+    When the DEX bytes are already in memory or arriving over a network, pass any `Stream` instead.
+
+    ```csharp
+    using Dexer.Core;
+
+    using Stream stream = File.OpenRead("classes.dex");
+    Dex dex = Dex.Read(stream);
+    ```
+  </Step>
+</Steps>
+
+### The `bufferize` parameter
+
+Both overloads accept an optional second argument `bool bufferize` that defaults to `true`.
+
+```csharp
+// Explicit — identical to calling Dex.Read("classes.dex")
+Dex dex = Dex.Read("classes.dex", bufferize: true);
+
+// Disable buffering — the stream must support random-access seeking
+Dex dex2 = Dex.Read(stream, bufferize: false);
+```
+
+<Note>
+When `bufferize` is `true`, Dexer copies the entire input stream into a `MemoryStream` before parsing. This lets you pass non-seekable streams (e.g. a `GZipStream` or a network stream) and also avoids keeping a file handle open while the object graph is live. Set it to `false` only when the source stream already supports random-access seeking and you want to avoid the extra allocation.
+</Note>
+
+## Traversing all classes
+
+After loading, the `Dex.Classes` property exposes a `List<ClassDefinition>` containing every top-level class defined in the file. Inner classes are nested under their enclosing class's `InnerClasses` list.
+
+```csharp
+using Dexer.Core;
+
+Dex dex = Dex.Read("classes.dex");
+
+foreach (ClassDefinition cls in dex.Classes)
+{
+    Console.WriteLine(cls.Fullname);
+}
+```
+
+<Tip>
+`ClassDefinition.Fullname` uses the Java dot-separated format, e.g. `com.example.MainActivity`. Inner classes appear as `com.example.Outer$Inner` and are accessible both from the flat `dex.Classes` list and from `Outer.InnerClasses`.
+</Tip>
+
+## Looking up a specific class
+
+Use `dex.GetClass(string fullname)` to retrieve a single `ClassDefinition` by its fully-qualified name. The method searches top-level classes and recursively descends into inner classes, returning `null` if the name is not found.
+
+```csharp
+ClassDefinition? mainActivity = dex.GetClass("dexer.poc.MainActivity");
+
+if (mainActivity is null)
+{
+    Console.WriteLine("Class not found");
+    return;
+}
+
+Console.WriteLine($"Found: {mainActivity.Fullname}");
+Console.WriteLine($"Superclass: {mainActivity.SuperClass}");
+```
+
+## Iterating methods and fields
+
+`ClassDefinition` exposes `Methods` (`List<MethodDefinition>`) and `Fields` (`List<FieldDefinition>`). Convenience helpers `GetMethod(string name)` and `GetField(string name)` return the first match by name.
+
+```csharp
+ClassDefinition cls = dex.GetClass("dexer.poc.MainActivity")!;
+
+// Iterate all methods
+foreach (MethodDefinition method in cls.Methods)
+{
+    string bodyInfo = method.Body is not null
+        ? $"{method.Body.Instructions.Count} instructions"
+        : "abstract or native";
+
+    Console.WriteLine($"  Method: {method.Name} — {bodyInfo}");
+}
+
+// Iterate all fields
+foreach (FieldDefinition field in cls.Fields)
+{
+    Console.WriteLine($"  Field: {field.Name} : {field.Type}");
+}
+
+// Direct lookup
+MethodDefinition? onCreate = cls.GetMethod("onCreate");
+FieldDefinition?  tag      = cls.GetField("TAG");
+```
+
+## Complete example — print all class names
+
+The snippet below loads a DEX file and prints every class name together with its method and field counts.
+
+```csharp
+using System;
+using Dexer.Core;
+
+Dex dex = Dex.Read("classes.dex");
+
+Console.WriteLine($"Loaded {dex.Classes.Count} top-level classes\n");
+
+foreach (ClassDefinition cls in dex.Classes)
+{
+    Console.WriteLine($"{cls.Fullname}");
+    Console.WriteLine($"  Methods : {cls.Methods.Count}");
+    Console.WriteLine($"  Fields  : {cls.Fields.Count}");
+    Console.WriteLine($"  Inners  : {cls.InnerClasses.Count}");
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="Modifying DEX files" icon="pen-to-square" href="/guides/modifying-dex">
+    Change opcodes, operands, and add new instructions to loaded methods.
+  </Card>
+  <Card title="Writing DEX files" icon="floppy-disk" href="/guides/writing-dex">
+    Persist a modified DEX back to disk or into a stream.
+  </Card>
+</CardGroup>
